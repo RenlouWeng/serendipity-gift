@@ -24,6 +24,28 @@ const sampleCustomerInput = [
   "buyer@patagonia.com",
 ].join("\n");
 
+const inputExamples = [
+  {
+    title: "公司名 + 官网",
+    lines: ["Patagonia", "https://www.patagonia.com/"],
+  },
+  {
+    title: "名片 / 邮箱签名",
+    lines: [
+      "John Miller | Senior Buyer",
+      "Patagonia",
+      "john.miller@patagonia.com",
+    ],
+  },
+  {
+    title: "聊天碎片 + 链接",
+    lines: [
+      "他说最近在看环保材料，不喜欢太花哨的礼物",
+      "https://www.linkedin.com/company/patagonia",
+    ],
+  },
+] as const;
+
 const quickRefinePresets = [
   {
     label: "更保守",
@@ -122,6 +144,14 @@ interface InputSignal {
   actionTarget?: FocusTarget;
 }
 
+interface ResultActionCard {
+  title: string;
+  body: string;
+  copyText: string;
+  event: string;
+  successMessage: string;
+}
+
 function getSignalToneClass(tone: SignalTone) {
   if (tone === "good") {
     return "border-[rgba(48,71,61,0.16)] bg-[rgba(48,71,61,0.08)]";
@@ -152,42 +182,26 @@ function buildInputSignals(
   if (!hasInput) {
     return [
       {
-        label: "公开线索",
-        value: "待补",
-        hint: "先贴公司名，系统才能开始做第一版判断。",
+        label: "现在能不能跑",
+        value: "先贴信息",
+        hint: "先贴公司名、官网、名片文字或聊天碎片中的任意一种，系统就能先出第一版。",
         tone: "idle",
-        actionLabel: "补客户信息",
+        actionLabel: "去输入",
         actionTarget: "customer",
       },
       {
-        label: "收礼人角色",
-        value: "待补",
-        hint: "老板、采购、市场、工程，角色一变，礼物方向就会变。",
+        label: "最值得补的一项",
+        value: "收礼人角色",
+        hint: "如果你知道对方是老板、Buyer 还是市场，这一项最能明显改变礼物方向。",
         tone: "idle",
         actionLabel: "补角色",
         actionTarget: "role",
       },
       {
-        label: "地区信息",
-        value: "待补",
-        hint: "地区会影响寄送、合规和审美偏好。",
+        label: "这版适合怎么推进",
+        value: "先轻量判断",
+        hint: "第一版先拿主推荐，不要一开始就试图把所有信息填满。",
         tone: "idle",
-        actionLabel: "补地区",
-        actionTarget: "region",
-      },
-      {
-        label: "系统动作",
-        value: "待开始",
-        hint: "先给公司名，后面不够的再补，不要一上来填太多。",
-        tone: "idle",
-      },
-      {
-        label: "人的线索",
-        value: "待补",
-        hint: "如果你记得他的性格、爱好或最近聊过的话，后面补进去会更像为他挑的。",
-        tone: "idle",
-        actionLabel: "补人物线索",
-        actionTarget: "human",
       },
     ];
   }
@@ -195,24 +209,24 @@ function buildInputSignals(
   const linkSignal: InputSignal =
     links.length >= 2
       ? {
-          label: "公开线索",
-          value: "够",
-          hint: `已识别 ${links.length} 个链接，足够先定主礼物。`,
+          label: "现在能不能跑",
+          value: "可以直接跑",
+          hint: `已识别 ${links.length} 个公开链接，这版已经足够先定主礼物。`,
           tone: "good",
         }
       : links.length === 1
         ? {
-            label: "公开线索",
-            value: "偏少",
-            hint: "能跑，但最好再补 1 个官网或社媒链接。",
+            label: "现在能不能跑",
+            value: "可以先跑",
+            hint: "已经能跑。若再补 1 个官网或社媒链接，建议会更稳。",
             tone: "warn",
             actionLabel: "补链接",
             actionTarget: "customer",
           }
         : {
-            label: "公开线索",
-            value: "无链接",
-            hint: "会按公司文字先做保守版，别急着做重定制。",
+            label: "现在能不能跑",
+            value: "能跑但偏保守",
+            hint: "当前没有识别到公开链接，会先按公司文字或聊天信息给你一个保守版。",
             tone: "risk",
             actionLabel: "补链接",
             actionTarget: "customer",
@@ -220,102 +234,73 @@ function buildInputSignals(
 
   const roleSignal: InputSignal = roleReady
     ? {
-        label: "收礼人角色",
-        value: "已补",
-        hint: recipientRole,
+        label: "最值得补的一项",
+        value: "角色已明确",
+        hint: `已按「${recipientRole}」来收窄礼物方向。`,
         tone: "good",
       }
     : {
-        label: "收礼人角色",
-        value: "缺失",
-        hint: "这是最值得补的一项，不然只能按通用商务联系人判断。",
+        label: "最值得补的一项",
+        value: "补收礼人角色",
+        hint: "这项最值钱。不填的话，只能按通用商务联系人先判断。",
         tone: "warn",
         actionLabel: "补角色",
         actionTarget: "role",
       };
 
-  const regionSignal: InputSignal = regionReady
-    ? {
-        label: "地区信息",
-        value: "已补",
-        hint: targetRegion.trim(),
-        tone: "good",
-      }
-    : {
-        label: "地区信息",
-        value: "缺失",
-        hint: "不填也能跑，但寄送和文化风险判断会更粗。",
-        tone: "warn",
-        actionLabel: "补地区",
-        actionTarget: "region",
-      };
-
-  const humanSignal: InputSignal =
-    humanClueCount >= 2
-      ? {
-          label: "人的线索",
-          value: "已补",
-          hint: "系统已经拿到人的线索，这一版更容易避开套路礼物。",
-          tone: "good",
-        }
-      : humanClueCount === 1
-        ? {
-            label: "人的线索",
-            value: "偏少",
-            hint: "再补一条最近聊过的话或你的主观印象，结果会更像为他挑的。",
-            tone: "warn",
-            actionLabel: "继续补人物线索",
-            actionTarget: "human",
-          }
-        : {
-            label: "人的线索",
-            value: "缺失",
-            hint: "只靠链接容易偏泛，最好补性格、爱好或聊天碎片。",
-            tone: "warn",
-            actionLabel: "补人物线索",
-            actionTarget: "human",
-          };
-
   let actionSignal: InputSignal;
 
   if (links.length >= 1 && roleReady && regionReady) {
     actionSignal = {
-      label: "系统动作",
-      value: "可直接跑",
-      hint: "优先先定主礼物，再问价和交期，不要继续加信息拖节奏。",
+      label: "这版适合怎么推进",
+      value: "直接推进主推荐",
+      hint: "这版已经适合先定主礼物，再去问价、交期和样品。",
       tone: "good",
     };
   } else if (links.length >= 1 && roleReady) {
     actionSignal = {
-      label: "系统动作",
-      value: "先跑再补地区",
-      hint: "礼物方向已经能收窄，地区主要影响寄送和审批风险。",
+      label: "这版适合怎么推进",
+      value: "先跑，再补地区",
+      hint: "礼物方向已经能收窄，地区主要影响寄送和文化/清关风险。",
       tone: "warn",
+      actionLabel: "补地区",
+      actionTarget: "region",
     };
   } else if (links.length >= 1 && regionReady) {
     actionSignal = {
-      label: "系统动作",
-      value: "先跑再补角色",
-      hint: "寄送约束已经够用，但礼物个性化仍偏保守。",
+      label: "这版适合怎么推进",
+      value: "先跑，再补角色",
+      hint: "寄送约束已经够用，但个性化还不够，先拿保守主推荐。",
       tone: "warn",
+      actionLabel: "补角色",
+      actionTarget: "role",
+    };
+  } else if (humanClueCount >= 1) {
+    actionSignal = {
+      label: "这版适合怎么推进",
+      value: "先跑，再补公开链接",
+      hint: "你已经给了人的线索，这能拉开差异；如果再补一个官网或社媒链接，会更稳。",
+      tone: "warn",
+      actionLabel: "补链接",
+      actionTarget: "customer",
     };
   } else if (links.length >= 1) {
     actionSignal = {
-      label: "系统动作",
-      value: "可先跑",
-      hint: "这版更适合现货、轻包装、低定制版本。",
+      label: "这版适合怎么推进",
+      value: "先轻量推进",
+      hint: "这版更适合现货、轻包装、低定制的安全版本。",
       tone: "warn",
     };
   } else {
     actionSignal = {
-      label: "系统动作",
-      value: "只能保守跑",
-      hint: "最好再补官网、邮箱域名或 LinkedIn，别直接押高客单礼物。",
+      label: "这版适合怎么推进",
+      value: "保守跑",
+      hint: "建议先拿一个低风险版本，别直接押高客单、重定制或强文化表达的礼物。",
       tone: "risk",
     };
   }
 
-  return [linkSignal, roleSignal, regionSignal, humanSignal, actionSignal];
+  return [linkSignal, roleSignal, actionSignal];
 }
 
 function buildPrimarySummary(result: AnalyzeResponse) {
@@ -452,6 +437,32 @@ function buildBackupSummary(result: AnalyzeResponse) {
     .join("\n\n");
 }
 
+function buildResultActionCards(result: AnalyzeResponse, occasion: Occasion) {
+  return [
+    {
+      title: "给老板一句话",
+      body: result.primary_recommendation.message_snippet,
+      copyText: result.primary_recommendation.message_snippet,
+      event: "copy_message_snippet_secondary",
+      successMessage: "给老板的一句话已复制。",
+    },
+    {
+      title: followUpLabel(occasion),
+      body: result.follow_up_message,
+      copyText: result.follow_up_message,
+      event: "copy_follow_up_message",
+      successMessage: "场景话术已复制。",
+    },
+    {
+      title: "发给采购 / 供应商",
+      body: result.procurement_brief.supplier_message,
+      copyText: buildProcurementSummary(result),
+      event: "copy_procurement_brief",
+      successMessage: "采购 brief 已复制。",
+    },
+  ] satisfies ResultActionCard[];
+}
+
 export function GiftTool() {
   const customerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const targetRegionRef = useRef<HTMLInputElement | null>(null);
@@ -483,6 +494,7 @@ export function GiftTool() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [showInputExamples, setShowInputExamples] = useState(false);
 
   const extractedLinks = useMemo(
     () => extractLinksFromCustomerInput(customerInput),
@@ -513,10 +525,6 @@ export function GiftTool() {
     () => (result ? buildPrimarySummary(result) : ""),
     [result],
   );
-  const procurementSummary = useMemo(
-    () => (result ? buildProcurementSummary(result) : ""),
-    [result],
-  );
   const backupSummary = useMemo(
     () => (result ? buildBackupSummary(result) : ""),
     [result],
@@ -531,6 +539,13 @@ export function GiftTool() {
   const executionChecklist = useMemo(
     () => (result ? buildExecutionChecklist(result, resultOccasionMeta) : []),
     [result, resultOccasionMeta],
+  );
+  const resultActionCards = useMemo(
+    () =>
+      result
+        ? buildResultActionCards(result, resultContext?.occasion ?? occasion)
+        : [],
+    [result, resultContext, occasion],
   );
   const advancedCount = useMemo(
     () =>
@@ -590,18 +605,19 @@ export function GiftTool() {
       return;
     }
 
+    if (target === "role") {
+      roleButtonRefs.current[1]?.focus();
+      return;
+    }
+
+    if (target === "region") {
+      targetRegionRef.current?.focus();
+      return;
+    }
+
     setShowAdvanced(true);
 
     window.setTimeout(() => {
-      if (target === "region") {
-        advancedSectionRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        });
-        targetRegionRef.current?.focus();
-        return;
-      }
-
       if (target === "note") {
         advancedSectionRef.current?.scrollIntoView({
           behavior: "smooth",
@@ -624,7 +640,7 @@ export function GiftTool() {
         behavior: "smooth",
         block: "center",
       });
-      roleButtonRefs.current[1]?.focus();
+      recentChatRef.current?.focus();
     }, 80);
   }
 
@@ -733,24 +749,48 @@ export function GiftTool() {
     await requestAnalysis({ note: nextNote });
   }
 
+  function resetForm() {
+    setCustomerInput("");
+    setNote("");
+    setPersonTraits([]);
+    setPersonInterests([]);
+    setRecentChat("");
+    setPersonImpression("");
+    setRecipientRole("未指定");
+    setTargetRegion("");
+    setOccasion(DEFAULT_OCCASION);
+    setBudgetTier(DEFAULT_BUDGET_TIER);
+    setShowAdvanced(false);
+    setShowInputExamples(false);
+    setResult(null);
+    setResultContext(null);
+    setError(null);
+    setCopyFeedback(null);
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.setTimeout(() => {
+      customerInputRef.current?.focus();
+    }, 220);
+  }
+
   return (
     <div className="panel p-4 sm:p-6 lg:p-7">
       <div className="rounded-[28px] border border-black/8 bg-[rgba(255,252,246,0.94)] p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-2xl">
             <p className="text-sm font-semibold uppercase tracking-[0.28em] text-[var(--accent-strong)]">
-              外贸送礼工作台
+              外贸送礼决策助手
             </p>
             <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em] sm:text-3xl">
-              先定主礼物，再推进采购和跟进
+              先别纠结送什么，先拿一版能推进的
             </h2>
             <p className="mt-3 text-sm leading-7 text-[var(--muted)] sm:text-base">
-              贴公司名就能开始。多补一个公开链接，或者补上角色和地区，结果会明显更准。
+              你手里有什么就贴什么。公司名、官网、名片文字、聊天碎片都行，不用先整理成一份完整资料。
             </p>
           </div>
           <button
             type="button"
-            className="rounded-full border border-black/10 px-4 py-2 text-sm font-medium transition hover:bg-black/[0.04]"
+            className="min-h-11 rounded-full border border-black/10 px-4 py-2 text-sm font-medium transition hover:bg-black/[0.04]"
             onClick={() => {
               setCustomerInput(sampleCustomerInput);
               setRecipientRole("采购 / Buyer");
@@ -762,39 +802,90 @@ export function GiftTool() {
               setPersonInterests(["可持续", "户外"]);
               setRecentChat("上次聊天提到他们最近在看环保材料，也说团队里很多人周末会去露营。");
               setPersonImpression("沟通很直接，不喜欢太花哨，但会注意品牌表达是不是做过功课。");
-              setShowAdvanced(true);
+              setShowAdvanced(false);
+              setShowInputExamples(false);
             }}
           >
-            填入示例
+            直接看示例
           </button>
         </div>
 
         <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
           <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
             <div className="space-y-2">
-              <label
-                className="block text-sm font-medium text-[var(--foreground)]"
-                htmlFor="customer-input"
-              >
-                客户信息
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <label
+                  className="block text-sm font-medium text-[var(--foreground)]"
+                  htmlFor="customer-input"
+                >
+                  把客户信息贴进来
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowInputExamples((current) => !current)}
+                  className="text-xs text-[var(--muted)] underline decoration-black/20 underline-offset-4 transition hover:text-[var(--foreground)]"
+                >
+                  {showInputExamples ? "收起示例" : "不知道怎么贴？"}
+                </button>
+              </div>
               <textarea
                 id="customer-input"
                 ref={customerInputRef}
                 value={customerInput}
                 onChange={(nextEvent) => setCustomerInput(nextEvent.target.value)}
-                placeholder={`只知道公司名也可以\nPatagonia\npatagonia.com\nbuyer@patagonia.com\nhttps://www.linkedin.com/company/patagonia`}
+                placeholder={`例如：\nPatagonia\nhttps://www.patagonia.com/\nJohn Miller | Senior Buyer\njohn.miller@patagonia.com\n他说最近在看环保材料，不喜欢太花哨的礼物`}
                 className="min-h-[172px] w-full rounded-[24px] border border-black/10 bg-white/84 px-4 py-4 text-sm leading-7 outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[rgba(170,111,58,0.12)]"
               />
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--muted)]">
-                <span>支持公司名、官网、邮箱域名、LinkedIn、IG 或展会名片文字。</span>
-                <span>当前识别到 {extractedLinks.length} 个可抓取链接</span>
+              {showInputExamples ? (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {inputExamples.map((example) => (
+                    <button
+                      key={example.title}
+                      type="button"
+                      onClick={() => {
+                        setCustomerInput(example.lines.join("\n"));
+                      }}
+                      className="rounded-[20px] border border-black/8 bg-[rgba(255,255,255,0.76)] p-4 text-left transition hover:border-[var(--accent)]/40 hover:bg-white"
+                    >
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        {example.title}
+                      </p>
+                      <p className="mt-2 whitespace-pre-line text-xs leading-6 text-[var(--muted)]">
+                        {example.lines.join("\n")}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="rounded-[20px] border border-black/8 bg-white/72 px-4 py-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">
+                  你不用一次填全
+                </p>
+                <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                  公司名、官网、邮箱域名、LinkedIn、IG、展会名片文字、几句聊天碎片，任意一种都能先跑。
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+                  {inputExamples.map((example) => (
+                    <span
+                      key={example.title}
+                      className="rounded-full border border-black/8 bg-[rgba(255,252,246,0.92)] px-3 py-2"
+                    >
+                      {example.title}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs leading-6 text-[var(--muted)]">
+                  {extractedLinks.length > 0
+                    ? `已识别 ${extractedLinks.length} 个公开链接，已经够先定方向。`
+                    : "你就算只知道公司名，也可以先跑。我会先给你一个更稳的版本。"}
+                </p>
               </div>
             </div>
 
             <div className="rounded-[24px] border border-black/8 bg-[rgba(255,255,255,0.72)] p-5">
-              <p className="text-sm font-semibold text-[var(--foreground)]">
-                现在能不能直接跑
+              <p className="text-sm font-semibold text-[var(--foreground)]">先看这三件事</p>
+              <p className="mt-2 text-xs leading-6 text-[var(--muted)]">
+                你现在最需要知道的，不是系统状态，而是这版能不能先推进。
               </p>
               <div className="mt-4 space-y-3">
                 {inputSignals.map((item) => (
@@ -823,7 +914,7 @@ export function GiftTool() {
                             focusTarget(item.actionTarget);
                           }
                         }}
-                        className="mt-3 rounded-full border border-black/10 bg-white/84 px-3 py-2 text-xs font-medium text-[var(--foreground)] transition hover:bg-white"
+                        className="mt-3 min-h-10 rounded-full border border-black/10 bg-white/84 px-3 py-2 text-xs font-medium text-[var(--foreground)] transition hover:bg-white"
                       >
                         {item.actionLabel}
                       </button>
@@ -834,95 +925,143 @@ export function GiftTool() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <label className="block text-sm font-medium text-[var(--foreground)]">
+                你现在更像哪种场景
+              </label>
+              <span className="text-xs text-[var(--muted)]">
+                这一项会直接影响送礼时机和表达方式
+              </span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {occasionOptions.map(([value, meta]) => {
+                const active = occasion === value;
+
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setOccasion(value)}
+                    className={
+                      active
+                        ? "min-h-12 rounded-[20px] border border-[var(--accent)] bg-[rgba(170,111,58,0.12)] p-4 text-left shadow-sm transition"
+                        : "min-h-12 rounded-[20px] border border-black/8 bg-white/76 p-4 text-left transition hover:border-[var(--accent)]/50 hover:bg-white"
+                    }
+                  >
+                    <p className="text-sm font-semibold text-[var(--foreground)]">
+                      {meta.label}
+                    </p>
+                    <p className="mt-1 text-xs leading-6 text-[var(--muted)]">
+                      {meta.hint}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <label className="block text-sm font-medium text-[var(--foreground)]">
+                  收礼人是谁
+                </label>
+                <button
+                  type="button"
+                  onClick={() => focusTarget("role")}
+                  className="text-xs text-[var(--muted)] underline decoration-black/20 underline-offset-4 transition hover:text-[var(--foreground)]"
+                >
+                  这项为什么值钱
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+                {roleOptions.map((value, index) => {
+                  const active = recipientRole === value;
+
+                  return (
+                    <button
+                      key={value}
+                      ref={(element) => {
+                        roleButtonRefs.current[index] = element;
+                      }}
+                      type="button"
+                      onClick={() => setRecipientRole(value)}
+                      className={
+                        active
+                          ? "min-h-11 rounded-[20px] border border-[var(--sage)] bg-[rgba(48,71,61,0.10)] px-3 py-3 text-sm font-medium text-[var(--foreground)] shadow-sm transition"
+                          : "min-h-11 rounded-[20px] border border-black/8 bg-white/74 px-3 py-3 text-sm text-[var(--muted)] transition hover:border-[var(--sage)]/40 hover:bg-white"
+                      }
+                    >
+                      {value}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label
+                className="block text-sm font-medium text-[var(--foreground)]"
+                htmlFor="target-region"
+              >
+                客户地区
+              </label>
+              <input
+                id="target-region"
+                ref={targetRegionRef}
+                value={targetRegion}
+                onChange={(nextEvent) => setTargetRegion(nextEvent.target.value)}
+                placeholder="例如：United States / Germany / Japan"
+                className="h-14 w-full rounded-[20px] border border-black/10 bg-white/84 px-4 text-sm outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[rgba(170,111,58,0.12)]"
+              />
+              <p className="text-xs leading-6 text-[var(--muted)]">
+                不填也能先跑。填了以后，我会把寄送和文化风险判断得更细一点。
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
             <button
               type="submit"
               disabled={isSubmitting}
-              className="rounded-full bg-[var(--foreground)] px-5 py-4 text-sm font-semibold text-white transition hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-60"
+              className="min-h-12 rounded-full bg-[var(--foreground)] px-5 py-4 text-sm font-semibold text-white transition hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting
-                ? `正在生成 ${occasionMeta.label} 的采购执行卡...`
-                : "先生成一版采购执行卡"}
+                ? `正在整理 ${occasionMeta.label} 的送礼建议...`
+                : "先看一版送礼建议"}
             </button>
             <button
               type="button"
               onClick={() => setShowAdvanced((current) => !current)}
-              className="rounded-full border border-black/10 bg-white/76 px-4 py-4 text-sm font-medium transition hover:bg-white"
+              className="min-h-12 rounded-full border border-black/10 bg-white/76 px-4 py-4 text-sm font-medium transition hover:bg-white"
             >
               {showAdvanced
                 ? "收起补充信息"
                 : advancedCount + humanClueCount > 0
-                  ? `补充信息，提高准确率（已填 ${advancedCount + humanClueCount} 项）`
-                  : "补充信息，提高准确率"}
+                  ? `再补一点，让结果更准（已填 ${advancedCount + humanClueCount} 项）`
+                  : "再补一点，让结果更准"}
             </button>
           </div>
+
+          {!result ? (
+            <div className="rounded-[24px] border border-dashed border-black/10 bg-[rgba(255,255,255,0.58)] px-4 py-4 text-sm leading-7 text-[var(--muted)]">
+              跑完后你会拿到 4 样东西：主推荐礼物、为什么送它、今天怎么推进、可以直接复制给老板/采购的话术。
+            </div>
+          ) : null}
 
           {showAdvanced ? (
             <div
               ref={advancedSectionRef}
               className="space-y-5 rounded-[24px] border border-black/8 bg-[rgba(255,255,255,0.68)] p-5"
             >
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <label className="block text-sm font-medium text-[var(--foreground)]">
-                    收礼人角色
-                  </label>
-                  <span className="text-xs text-[var(--muted)]">
-                    这是最值得补的一个变量
-                  </span>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                  {roleOptions.map((value, index) => {
-                    const active = recipientRole === value;
-
-                    return (
-                      <button
-                        key={value}
-                        ref={(element) => {
-                          roleButtonRefs.current[index] = element;
-                        }}
-                        type="button"
-                        onClick={() => setRecipientRole(value)}
-                        className={
-                          active
-                            ? "rounded-[20px] border border-[var(--sage)] bg-[rgba(48,71,61,0.10)] px-3 py-3 text-sm font-medium text-[var(--foreground)] shadow-sm transition"
-                            : "rounded-[20px] border border-black/8 bg-white/74 px-3 py-3 text-sm text-[var(--muted)] transition hover:border-[var(--sage)]/40 hover:bg-white"
-                        }
-                      >
-                        {value}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="grid gap-4 lg:grid-cols-[0.7fr_1.3fr]">
-                <div className="space-y-2">
-                  <label
-                    className="block text-sm font-medium text-[var(--foreground)]"
-                    htmlFor="target-region"
-                  >
-                    目标国家 / 地区
-                  </label>
-                  <input
-                    id="target-region"
-                    ref={targetRegionRef}
-                    value={targetRegion}
-                    onChange={(nextEvent) => setTargetRegion(nextEvent.target.value)}
-                    placeholder="例如：United States / Germany / Japan"
-                    className="h-14 w-full rounded-[20px] border border-black/10 bg-white/84 px-4 text-sm outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[rgba(170,111,58,0.12)]"
-                  />
-                  <p className="text-xs leading-6 text-[var(--muted)]">
-                    不填则按常见欧美商务寄送约束处理。
-                  </p>
-                </div>
-
+              <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="space-y-2">
                   <label
                     className="block text-sm font-medium text-[var(--foreground)]"
                     htmlFor="note"
                   >
-                    限制 / 偏好
+                    有什么硬限制，直接说
                   </label>
                   <textarea
                     id="note"
@@ -932,6 +1071,17 @@ export function GiftTool() {
                     placeholder="例如：想在 1 周内寄出；不要食品和液体；最好老板当天就能批；客户偏设计感但别太私人。"
                     className="min-h-[108px] w-full rounded-[24px] border border-black/10 bg-white/84 px-4 py-4 text-sm leading-7 outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[rgba(170,111,58,0.12)]"
                   />
+                </div>
+
+                <div className="space-y-3 rounded-[22px] border border-black/8 bg-white/66 p-4">
+                  <p className="text-sm font-semibold text-[var(--foreground)]">
+                    什么情况下值得补这里
+                  </p>
+                  <ul className="space-y-2 text-sm leading-7 text-[var(--muted)]">
+                    <li>你觉得主推荐太泛，像谁都能送。</li>
+                    <li>你知道对方一点个人线索，想把差距拉开。</li>
+                    <li>你已经有硬要求，比如别太重、别食品、要好审批。</li>
+                  </ul>
                 </div>
               </div>
 
@@ -945,7 +1095,7 @@ export function GiftTool() {
                       让礼物更像为他挑的
                     </p>
                     <p className="mt-1 text-xs leading-6 text-[var(--muted)]">
-                      点标签就行。想到哪条填哪条，不用整理成正式资料。
+                      想到一条填一条就行，这里越像聊天碎片越有用。
                     </p>
                   </div>
                   <span className="rounded-full border border-black/8 bg-white/72 px-3 py-2 text-xs text-[var(--muted)]">
@@ -1018,14 +1168,14 @@ export function GiftTool() {
                       className="block text-sm font-medium text-[var(--foreground)]"
                       htmlFor="recent-chat"
                     >
-                      最近聊过的话
+                      上次聊天里你记住的一句话
                     </label>
                     <textarea
                       id="recent-chat"
                       ref={recentChatRef}
                       value={recentChat}
                       onChange={(nextEvent) => setRecentChat(nextEvent.target.value)}
-                      placeholder="直接贴 3-10 句聊天也可以，例如：他说最近在做品牌升级；周末会去徒步；不喜欢太夸张的礼物。"
+                      placeholder="例如：他说最近在做品牌升级；团队最近在看环保材料；不喜欢太夸张的礼物。"
                       className="min-h-[116px] w-full rounded-[24px] border border-black/10 bg-white/84 px-4 py-4 text-sm leading-7 outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[rgba(170,111,58,0.12)]"
                     />
                   </div>
@@ -1035,7 +1185,7 @@ export function GiftTool() {
                       className="block text-sm font-medium text-[var(--foreground)]"
                       htmlFor="person-impression"
                     >
-                      你对他的印象
+                      你对他的第一印象
                     </label>
                     <textarea
                       id="person-impression"
@@ -1048,43 +1198,7 @@ export function GiftTool() {
                 </div>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="block text-sm font-medium text-[var(--foreground)]">
-                      送礼场景
-                    </label>
-                    <span className="text-xs text-[var(--muted)]">
-                      决定寄送和递交时机
-                    </span>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {occasionOptions.map(([value, meta]) => {
-                      const active = occasion === value;
-
-                      return (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => setOccasion(value)}
-                          className={
-                            active
-                              ? "rounded-[22px] border border-[var(--accent)] bg-[rgba(170,111,58,0.12)] p-4 text-left shadow-sm transition"
-                              : "rounded-[22px] border border-black/8 bg-white/74 p-4 text-left transition hover:border-[var(--accent)]/50 hover:bg-white"
-                          }
-                        >
-                          <p className="text-sm font-semibold text-[var(--foreground)]">
-                            {meta.label}
-                          </p>
-                          <p className="mt-2 text-xs leading-6 text-[var(--muted)]">
-                            {meta.hint}
-                          </p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
+              <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
                     <label className="block text-sm font-medium text-[var(--foreground)]">
@@ -1120,15 +1234,26 @@ export function GiftTool() {
                     })}
                   </div>
                 </div>
+
+                <div className="rounded-[22px] border border-black/8 bg-white/66 p-4">
+                  <p className="text-sm font-semibold text-[var(--foreground)]">
+                    什么时候值得改预算
+                  </p>
+                  <ul className="mt-3 space-y-2 text-sm leading-7 text-[var(--muted)]">
+                    <li>客户层级明显更高，普通预算撑不住场面。</li>
+                    <li>老板已经点头，重点变成怎么把记忆点做出来。</li>
+                    <li>你现在需要的不只是稳，还要有一点惊喜感。</li>
+                  </ul>
+                </div>
               </div>
 
               <div className="flex justify-end">
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="rounded-full border border-black/10 bg-[var(--foreground)] px-4 py-3 text-sm font-semibold text-white transition hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="min-h-11 rounded-full border border-black/10 bg-[var(--foreground)] px-4 py-3 text-sm font-semibold text-white transition hover:opacity-92 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  带补充信息重新生成
+                  带这些信息重跑一版
                 </button>
               </div>
             </div>
@@ -1204,6 +1329,18 @@ export function GiftTool() {
                       {displayValue(result.target_region)}
                     </span>
                   </div>
+                  {resultConfidenceMeta ? (
+                    <div className="mt-4 rounded-[18px] border border-black/8 bg-white/78 px-4 py-3">
+                      <p className="text-sm leading-7 text-[var(--foreground)]">
+                        {resultConfidenceMeta.hint}
+                      </p>
+                      {result.analysis_gaps[0] ? (
+                        <p className="mt-1 text-xs leading-6 text-[var(--muted)]">
+                          如果再补 1 样：{result.analysis_gaps[0]}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -1216,27 +1353,21 @@ export function GiftTool() {
                         "主推荐采购卡已复制。",
                       )
                     }
-                    className="rounded-full border border-black/10 bg-white/80 px-4 py-3 text-sm font-medium transition hover:bg-white"
+                    className="min-h-11 rounded-full border border-black/10 bg-white/80 px-4 py-3 text-sm font-medium transition hover:bg-white"
                   >
-                    复制主推荐卡
+                    复制这版建议
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      void handleCopy(
-                        result.primary_recommendation.message_snippet,
-                        "copy_message_snippet",
-                        "给老板的一句话已复制。",
-                      )
-                    }
-                    className="rounded-full border border-black/10 bg-white/80 px-4 py-3 text-sm font-medium transition hover:bg-white"
+                    onClick={resetForm}
+                    className="min-h-11 rounded-full border border-black/10 bg-white/80 px-4 py-3 text-sm font-medium transition hover:bg-white"
                   >
-                    复制老板说明
+                    换个客户重来
                   </button>
                 </div>
               </div>
 
-              <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-[22px] border border-black/8 bg-white/82 p-4">
                   <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
                     建议价格
@@ -1255,26 +1386,10 @@ export function GiftTool() {
                 </div>
                 <div className="rounded-[22px] border border-black/8 bg-white/82 p-4">
                   <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
-                    定制强度
-                  </p>
-                  <p className="mt-2 text-sm leading-7 text-[var(--foreground)]">
-                    {result.primary_recommendation.customization_level}
-                  </p>
-                </div>
-                <div className="rounded-[22px] border border-black/8 bg-white/82 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
                     寄送判断
                   </p>
                   <p className="mt-2 text-sm leading-7 text-[var(--foreground)]">
                     {result.primary_recommendation.shipping_ease}
-                  </p>
-                </div>
-                <div className="rounded-[22px] border border-black/8 bg-white/82 p-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
-                    采购方向
-                  </p>
-                  <p className="mt-2 text-sm leading-7 text-[var(--foreground)]">
-                    {result.primary_recommendation.sourcing_tip}
                   </p>
                 </div>
                 <div className="rounded-[22px] border border-black/8 bg-white/82 p-4">
@@ -1290,7 +1405,7 @@ export function GiftTool() {
               <div className="mt-5 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="rounded-[24px] border border-black/8 bg-white/82 p-5">
                   <p className="text-sm font-semibold text-[var(--foreground)]">
-                    执行判断
+                    为什么是它
                   </p>
                   <p className="mt-3 text-base leading-8 text-[var(--foreground)]">
                     {result.decision_summary}
@@ -1316,139 +1431,65 @@ export function GiftTool() {
                 </div>
 
                 <div className="rounded-[24px] border border-black/8 bg-white/82 p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-[var(--foreground)]">
-                      采购 brief
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void handleCopy(
-                          procurementSummary,
-                          "copy_procurement_brief",
-                          "采购 brief 已复制。",
-                        )
-                      }
-                      className="rounded-full border border-black/10 px-3 py-2 text-xs font-medium transition hover:bg-black/[0.04]"
-                    >
-                      复制给采购
-                    </button>
-                  </div>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
-                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
-                        执行方式
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                        {result.procurement_brief.execution_mode}
-                      </p>
-                    </div>
-                    <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
-                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
-                        建议数量
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                        {result.procurement_brief.recommended_quantity}
-                      </p>
-                    </div>
-                    <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
-                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
-                        打样建议
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                        {result.procurement_brief.sample_plan}
-                      </p>
-                    </div>
-                    <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
-                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
-                        包装建议
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                        {result.procurement_brief.packaging_plan}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="mt-3 rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
-                    <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
-                      品牌处理
-                    </p>
-                    <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                      {result.procurement_brief.branding_note}
-                    </p>
-                  </div>
-                  <div className="mt-3 rounded-[18px] bg-[rgba(48,71,61,0.06)] px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--sage)]">
-                        发给供应商的询价话术
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void handleCopy(
-                            result.procurement_brief.supplier_message,
-                            "copy_supplier_message",
-                            "供应商话术已复制。",
-                          )
-                        }
-                        className="rounded-full border border-black/10 bg-white/80 px-3 py-2 text-xs font-medium transition hover:bg-white"
+                  <p className="text-sm font-semibold text-[var(--foreground)]">
+                    今天怎么推进
+                  </p>
+                  <div className="mt-4 space-y-3">
+                    {executionChecklist.map((step, index) => (
+                      <div
+                        key={step.title}
+                        className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-4"
                       >
-                        复制
-                      </button>
-                    </div>
-                    <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                      {result.procurement_brief.supplier_message}
-                    </p>
+                        <p className="text-sm font-semibold text-[var(--foreground)]">
+                          {index + 1}. {step.title}
+                        </p>
+                        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                          {step.body}
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
 
-              <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                <div className="rounded-[24px] border border-black/8 bg-white/82 p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-[var(--foreground)]">
-                      给老板一句话
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void handleCopy(
-                          result.primary_recommendation.message_snippet,
-                          "copy_message_snippet_secondary",
-                          "给老板的一句话已复制。",
-                        )
-                      }
-                      className="rounded-full border border-black/10 px-3 py-2 text-xs font-medium transition hover:bg-black/[0.04]"
-                    >
-                      复制
-                    </button>
-                  </div>
-                  <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
-                    {result.primary_recommendation.message_snippet}
+              <div className="mt-5 rounded-[24px] border border-black/8 bg-white/82 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-[var(--foreground)]">
+                    直接复制去用
                   </p>
+                  <span className="text-xs text-[var(--muted)]">
+                    少改字，先发出去
+                  </span>
                 </div>
-
-                <div className="rounded-[24px] border border-black/8 bg-white/82 p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-[var(--foreground)]">
-                      {followUpLabel(resultContext?.occasion ?? occasion)}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        void handleCopy(
-                          result.follow_up_message,
-                          "copy_follow_up_message",
-                          "场景话术已复制。",
-                        )
-                      }
-                      className="rounded-full border border-black/10 px-3 py-2 text-xs font-medium transition hover:bg-black/[0.04]"
+                <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                  {resultActionCards.map((card) => (
+                    <div
+                      key={card.title}
+                      className="rounded-[20px] border border-black/8 bg-[rgba(255,247,236,0.86)] p-4"
                     >
-                      复制
-                    </button>
-                  </div>
-                  <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
-                    {result.follow_up_message}
-                  </p>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-sm font-semibold text-[var(--foreground)]">
+                          {card.title}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleCopy(
+                              card.copyText,
+                              card.event,
+                              card.successMessage,
+                            )
+                          }
+                          className="min-h-10 rounded-full border border-black/10 bg-white/84 px-3 py-2 text-xs font-medium transition hover:bg-white"
+                        >
+                          复制
+                        </button>
+                      </div>
+                      <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
+                        {card.body}
+                      </p>
+                    </div>
+                  ))}
                 </div>
               </div>
             </article>
@@ -1457,10 +1498,10 @@ export function GiftTool() {
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="eyebrow">快速纠偏</p>
-                  <h3 className="mt-4 text-xl font-semibold">觉得不准，点一个方向重跑</h3>
+                  <h3 className="mt-4 text-xl font-semibold">觉得不对，就换个方向再跑</h3>
                 </div>
                 <span className="text-xs text-[var(--muted)]">
-                  会自动写入限制 / 偏好再重跑
+                  系统会自动把这个要求带进去重跑
                 </span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
@@ -1470,7 +1511,7 @@ export function GiftTool() {
                     type="button"
                     disabled={isSubmitting}
                     onClick={() => void handleQuickRefine(preset.note)}
-                    className="rounded-full border border-black/10 bg-white/76 px-4 py-3 text-sm font-medium transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+                    className="min-h-11 rounded-full border border-black/10 bg-white/76 px-4 py-3 text-sm font-medium transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {preset.label}
                   </button>
@@ -1479,28 +1520,6 @@ export function GiftTool() {
             </article>
 
             <div className="grid gap-4 lg:grid-cols-[1fr_0.95fr]">
-              <article className="soft-card">
-                <div>
-                  <p className="eyebrow">今天推进</p>
-                  <h3 className="mt-4 text-xl font-semibold">先做这三步</h3>
-                </div>
-                <div className="mt-4 space-y-3">
-                  {executionChecklist.map((step, index) => (
-                    <div
-                      key={step.title}
-                      className="rounded-[18px] border border-black/8 bg-white/66 px-4 py-4"
-                    >
-                      <p className="text-sm font-semibold text-[var(--foreground)]">
-                        {index + 1}. {step.title}
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                        {step.body}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </article>
-
               <article className="soft-card">
                 <p className="eyebrow">风险检查</p>
                 <h3 className="mt-4 text-xl font-semibold">发出前再看一眼</h3>
@@ -1532,6 +1551,69 @@ export function GiftTool() {
                   )}
                 </ul>
               </article>
+
+              <article className="soft-card">
+                <p className="eyebrow">采购细节</p>
+                <h3 className="mt-4 text-xl font-semibold">需要落地时再展开看细</h3>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-[18px] bg-white/72 px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
+                      执行方式
+                    </p>
+                    <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                      {result.procurement_brief.execution_mode}
+                    </p>
+                  </div>
+                  <div className="rounded-[18px] bg-white/72 px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
+                      建议数量
+                    </p>
+                    <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                      {result.procurement_brief.recommended_quantity}
+                    </p>
+                  </div>
+                  <div className="rounded-[18px] bg-white/72 px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
+                      打样建议
+                    </p>
+                    <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                      {result.procurement_brief.sample_plan}
+                    </p>
+                  </div>
+                  <div className="rounded-[18px] bg-white/72 px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
+                      包装建议
+                    </p>
+                    <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                      {result.procurement_brief.packaging_plan}
+                    </p>
+                  </div>
+                  <div className="rounded-[18px] bg-white/72 px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
+                      定制强度
+                    </p>
+                    <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                      {result.primary_recommendation.customization_level}
+                    </p>
+                  </div>
+                  <div className="rounded-[18px] bg-white/72 px-4 py-3">
+                    <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
+                      采购方向
+                    </p>
+                    <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                      {result.primary_recommendation.sourcing_tip}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3 rounded-[18px] bg-white/72 px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.22em] text-[var(--accent)]">
+                    品牌处理
+                  </p>
+                  <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+                    {result.procurement_brief.branding_note}
+                  </p>
+                </div>
+              </article>
             </div>
 
             {result.backup_recommendations.length > 0 ? (
@@ -1552,7 +1634,7 @@ export function GiftTool() {
                         "备选摘要已复制。",
                       )
                     }
-                    className="rounded-full border border-black/10 px-3 py-2 text-xs font-medium transition hover:bg-black/[0.04]"
+                    className="min-h-10 rounded-full border border-black/10 px-3 py-2 text-xs font-medium transition hover:bg-black/[0.04]"
                   >
                     复制备选摘要
                   </button>
@@ -1727,7 +1809,7 @@ export function GiftTool() {
                         "联系方式已复制。",
                       )
                     }
-                    className="rounded-full bg-[var(--accent-strong)] px-5 py-3 text-sm font-semibold text-white transition hover:opacity-92"
+                    className="min-h-11 rounded-full bg-[var(--accent-strong)] px-5 py-3 text-sm font-semibold text-white transition hover:opacity-92"
                   >
                     复制联系方式
                   </button>

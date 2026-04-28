@@ -3,15 +3,15 @@ import { GiftTool } from "@/components/gift-tool";
 const serendipityRules = [
   {
     title: "Relevant",
-    body: "跟客户现在的品牌、业务、岗位角色有关系。不是你觉得好看，而是对方收到时会觉得这东西和我们有关。",
+    body: "先跟客户的品牌、业务、岗位搭上关系，不然再贵也容易像乱送。",
   },
   {
     title: "Unexpected",
-    body: "不是钢笔、保温杯、茶叶这种所有人都在送的通用商务礼。要让客户觉得你不是从批发目录里随手翻的。",
+    body: "别一眼看上去就是目录货，客户才会觉得你真的有做功课。",
   },
   {
     title: "Novelty",
-    body: "对方之前大概率没收过，但一看就能理解你为什么送这个。不是猎奇，而是新鲜得刚刚好。",
+    body: "有点新鲜感，但又不至于太冒犯、太私人、太难解释。",
   },
 ];
 
@@ -26,14 +26,14 @@ export default function Home() {
           <div className="max-w-4xl">
             <p className="eyebrow">SERENDIPITY 送礼判断法</p>
             <h1 className="mt-3 text-3xl font-semibold tracking-[-0.05em] sm:text-4xl">
-              先判断这份礼物值不值得送，
+              不知道送什么时，
               <span className="font-serif italic text-[var(--accent-strong)]">
-                再决定送什么
+                先跑一版再决定
               </span>
               。
             </h1>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-[var(--muted)] sm:text-base">
-              `Relevant` 是跟客户有关，`Unexpected` 是不像目录货，`Novelty` 是有点新鲜但不过火。下面直接贴客户信息，先跑第一版。
+              广交会后、客户来访前、节日前，最怕的不是没礼物，是送得太普通、太重、太难批。你把手里有的客户信息贴进来，我先给你一版能推进的建议。
             </p>
           </div>
 
