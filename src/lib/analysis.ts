@@ -717,7 +717,10 @@ async function callOpenAIJson(systemPrompt: string, payload: unknown) {
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: JSON.stringify(payload) },
+      {
+        role: "user",
+        content: `Return a valid json object only for this payload:\n${JSON.stringify(payload)}`,
+      },
     ],
   };
 
