@@ -736,7 +736,14 @@ async function callOpenAIJson(systemPrompt: string, payload: unknown) {
   });
 
   if (!response.ok) {
-    throw new Error(`OpenAI ${response.status}`);
+    const responseText = await response.text().catch(() => "");
+    const details = truncate(cleanText(responseText), 320);
+
+    throw new Error(
+      details
+        ? `OpenAI ${response.status}: ${details}`
+        : `OpenAI ${response.status}`,
+    );
   }
 
   const data = (await response.json()) as {
