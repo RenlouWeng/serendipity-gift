@@ -71,8 +71,10 @@ interface CustomerProfileContext {
 
 const SOURCE_LIMIT = 5;
 const FETCH_TIMEOUT_MS = 8_000;
-const AI_TIMEOUT_MS = 45_000;
+const AI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS ?? 55_000);
 const MAX_SOURCE_CHARS = 2_200;
+const AI_SOURCE_LIMIT = 3;
+const AI_SOURCE_EVIDENCE_MAX_CHARS = 900;
 const DEFAULT_RECIPIENT_ROLE = "未指定";
 const DEFAULT_TARGET_REGION = "未指定";
 const MANUAL_SOURCE_URL = "manual://customer-input";
@@ -1216,6 +1218,11 @@ async function generateDecisionWithOpenAI(input: {
 }) {
   const occasionMeta = getOccasionMeta(input.occasion);
   const budgetMeta = getBudgetMeta(input.budgetTier);
+  const compactSources = input.sources.slice(0, AI_SOURCE_LIMIT).map((source) => ({
+    url: source.url,
+    kind: source.kind,
+    evidence: truncate(source.evidence, AI_SOURCE_EVIDENCE_MAX_CHARS),
+  }));
 
   return sanitizeDecisionPayload(
     await callOpenAIJson(DECISION_SYSTEM_PROMPT, {
@@ -1246,11 +1253,7 @@ async function generateDecisionWithOpenAI(input: {
         price_band: budgetMeta.price_band,
       },
       note: input.note?.trim() || "",
-      sources: input.sources.map((source) => ({
-        url: source.url,
-        kind: source.kind,
-        evidence: source.evidence,
-      })),
+      sources: compactSources,
     }),
     input.profile,
   );
