@@ -116,7 +116,8 @@ const DECISION_SYSTEM_PROMPT = `
 - 原始公开来源摘要
 - 用户可选补充说明
 
-输出必须是严格 JSON，不要输出 Markdown，不要输出代码块。
+输出必须是严格 json，不要输出 Markdown，不要输出代码块。
+你必须返回一个有效的 json object。
 
 你必须遵守：
 - 只返回 1 个主推荐和 2 个备选。
