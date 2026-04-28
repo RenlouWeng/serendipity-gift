@@ -56,6 +56,7 @@ npm run dev
 - `OPENAI_BASE_URL`: 可选。用于 OpenAI 兼容网关。
 - `OPENAI_MODEL`: 默认 `gpt-4.1-mini`
 - `OPENAI_REASONING_EFFORT`: 可选。对 `gpt-5` 系列可设为 `low` / `medium` / `high`
+- `OPENAI_TIMEOUT_MS`: 可选。默认 `18000`。如果你走代理链路，建议不要设太大，避免用户长时间等待后才回退到 fallback
 - `NEXT_PUBLIC_SITE_URL`: 站点 URL，用于 metadata / sitemap / robots
 - `NEXT_PUBLIC_CONTACT_HANDLE`: 结果页 CTA 展示并复制的联系方式
 - `LEAD_WEBHOOK_URL`: 可选。配置后，`/api/lead` 会把 CTA 事件转发到你的 webhook

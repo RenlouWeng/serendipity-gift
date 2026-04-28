@@ -27,3 +27,19 @@ export function resolveOpenAIConfig(): ResolvedOpenAIConfig | null {
     model,
   };
 }
+
+export function shouldSkipOpenAI(config: ResolvedOpenAIConfig | null) {
+  if (!config) {
+    return true;
+  }
+
+  const loweredKey = config.apiKey.trim().toLowerCase();
+  const loweredBase = config.baseUrl.trim().toLowerCase();
+
+  return (
+    loweredKey === "dummy" ||
+    loweredKey === "test" ||
+    loweredKey === "placeholder" ||
+    loweredBase.includes("example.com")
+  );
+}

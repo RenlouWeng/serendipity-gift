@@ -35,7 +35,12 @@ export interface SourceSummary {
 export interface GiftIdeaWithReasoning {
   name: string;
   item_type: string;
+  gift_components: string[];
   reason: string;
+  why_relevant: string;
+  why_unexpected: string;
+  why_novel: string;
+  business_fit: string;
   why_now: string;
   budget_fit: string;
   target_unit_price: string;
@@ -63,6 +68,7 @@ export interface AnalyzeResponse {
   analysis_confidence: AnalysisConfidence;
   analysis_gaps: string[];
   evidence_highlights: string[];
+  recipient_anchors: string[];
   recipient_role: string;
   target_region: string;
   primary_recommendation: GiftIdeaWithReasoning;

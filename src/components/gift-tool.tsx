@@ -309,6 +309,9 @@ function buildPrimarySummary(result: AnalyzeResponse) {
   return [
     `主推荐：${primary.name}`,
     `品类：${primary.item_type}`,
+    primary.gift_components.length > 0
+      ? `礼物组成：${primary.gift_components.join(" + ")}`
+      : "",
     `建议价格：${primary.target_unit_price}`,
     `交期：${primary.lead_time}`,
     `定制建议：${primary.customization_level}`,
@@ -316,6 +319,10 @@ function buildPrimarySummary(result: AnalyzeResponse) {
     `采购建议：${primary.sourcing_tip}`,
     `审批提醒：${primary.approval_hint}`,
     `为什么选它：${primary.reason}`,
+    `相关性：${primary.why_relevant}`,
+    `意外感：${primary.why_unexpected}`,
+    `新鲜感：${primary.why_novel}`,
+    `商务可执行性：${primary.business_fit}`,
     `风险提醒：${primary.caution}`,
   ].join("\n");
 }
@@ -429,9 +436,15 @@ function buildBackupSummary(result: AnalyzeResponse) {
       [
         `备选 ${index + 1}：${gift.name}`,
         `品类：${gift.item_type}`,
+        gift.gift_components.length > 0
+          ? `礼物组成：${gift.gift_components.join(" + ")}`
+          : "",
         `建议价格：${gift.target_unit_price}`,
         `交期：${gift.lead_time}`,
         `为什么备选：${gift.reason}`,
+        `相关性：${gift.why_relevant}`,
+        `意外感：${gift.why_unexpected}`,
+        `新鲜感：${gift.why_novel}`,
       ].join("\n"),
     )
     .join("\n\n");
@@ -1312,10 +1325,22 @@ export function GiftTool() {
                   <h3 className="mt-3 text-3xl font-semibold tracking-[-0.04em]">
                     {result.primary_recommendation.name}
                   </h3>
-                  <p className="mt-2 text-sm font-medium text-[var(--muted)]">
-                    {result.primary_recommendation.item_type}
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+	                  <p className="mt-2 text-sm font-medium text-[var(--muted)]">
+	                    {result.primary_recommendation.item_type}
+	                  </p>
+	                  {result.primary_recommendation.gift_components.length > 0 ? (
+	                    <div className="mt-4 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
+	                      {result.primary_recommendation.gift_components.map((component) => (
+	                        <span
+	                          key={component}
+	                          className="rounded-full border border-black/8 bg-white/72 px-3 py-2"
+	                        >
+	                          {component}
+	                        </span>
+	                      ))}
+	                    </div>
+	                  ) : null}
+	                  <div className="mt-4 flex flex-wrap gap-2 text-xs text-[var(--muted)]">
                     <span className="rounded-full bg-white/72 px-3 py-2">
                       {resultOccasionMeta.label}
                     </span>
@@ -1407,22 +1432,70 @@ export function GiftTool() {
                   <p className="text-sm font-semibold text-[var(--foreground)]">
                     为什么是它
                   </p>
-                  <p className="mt-3 text-base leading-8 text-[var(--foreground)]">
-                    {result.decision_summary}
-                  </p>
-                  <div className="mt-4 grid gap-3">
-                    <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
-                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
-                        为什么选它
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-                        {result.primary_recommendation.reason}
-                      </p>
-                    </div>
-                    <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
-                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
-                        为什么现在送
-                      </p>
+	                  <p className="mt-3 text-base leading-8 text-[var(--foreground)]">
+	                    {result.decision_summary}
+	                  </p>
+	                  {result.recipient_anchors.length > 0 ? (
+	                    <div className="mt-4 rounded-[18px] border border-black/8 bg-[rgba(255,247,236,0.72)] px-4 py-3">
+	                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
+	                        这次抓住的人物锚点
+	                      </p>
+	                      <ul className="mt-2 space-y-2 text-sm leading-7 text-[var(--muted)]">
+	                        {result.recipient_anchors.map((anchor) => (
+	                          <li key={anchor}>{anchor}</li>
+	                        ))}
+	                      </ul>
+	                    </div>
+	                  ) : null}
+	                  <div className="mt-4 grid gap-3">
+	                    <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
+	                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
+	                        为什么选它
+	                      </p>
+	                      <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+	                        {result.primary_recommendation.reason}
+	                      </p>
+	                    </div>
+	                    <div className="grid gap-3 md:grid-cols-2">
+	                      <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
+	                        <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
+	                          Relevant
+	                        </p>
+	                        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+	                          {result.primary_recommendation.why_relevant}
+	                        </p>
+	                      </div>
+	                      <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
+	                        <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
+	                          Unexpected
+	                        </p>
+	                        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+	                          {result.primary_recommendation.why_unexpected}
+	                        </p>
+	                      </div>
+	                    </div>
+	                    <div className="grid gap-3 md:grid-cols-2">
+	                      <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
+	                        <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
+	                          Novelty
+	                        </p>
+	                        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+	                          {result.primary_recommendation.why_novel}
+	                        </p>
+	                      </div>
+	                      <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
+	                        <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
+	                          Business Fit
+	                        </p>
+	                        <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
+	                          {result.primary_recommendation.business_fit}
+	                        </p>
+	                      </div>
+	                    </div>
+	                    <div className="rounded-[18px] bg-[rgba(255,247,236,0.9)] px-4 py-3">
+	                      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--accent)]">
+	                        为什么现在送
+	                      </p>
                       <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
                         {result.primary_recommendation.why_now}
                       </p>
@@ -1649,11 +1722,16 @@ export function GiftTool() {
                           <h3 className="mt-4 text-2xl font-semibold tracking-[-0.03em]">
                             {gift.name}
                           </h3>
-                          <p className="mt-2 text-sm font-medium text-[var(--muted)]">
-                            {gift.item_type}
-                          </p>
-                        </div>
-                      </div>
+	                          <p className="mt-2 text-sm font-medium text-[var(--muted)]">
+	                            {gift.item_type}
+	                          </p>
+	                          {gift.gift_components.length > 0 ? (
+	                            <p className="mt-3 text-sm leading-7 text-[var(--muted)]">
+	                              组成：{gift.gift_components.join(" + ")}
+	                            </p>
+	                          ) : null}
+	                        </div>
+	                      </div>
 
                       <div className="mt-5 grid gap-3 sm:grid-cols-2">
                         <div className="rounded-[18px] bg-white/72 px-4 py-3">
@@ -1672,13 +1750,22 @@ export function GiftTool() {
                         </div>
                       </div>
 
-                      <ul className="mt-4 space-y-3 text-sm leading-7 text-[var(--muted)]">
-                        <li className="rounded-[18px] bg-white/72 px-4 py-3">
-                          {gift.reason}
-                        </li>
-                        <li className="rounded-[18px] bg-white/72 px-4 py-3">
-                          定制：{gift.customization_level}
-                        </li>
+	                      <ul className="mt-4 space-y-3 text-sm leading-7 text-[var(--muted)]">
+	                        <li className="rounded-[18px] bg-white/72 px-4 py-3">
+	                          {gift.reason}
+	                        </li>
+	                        <li className="rounded-[18px] bg-white/72 px-4 py-3">
+	                          Relevant：{gift.why_relevant}
+	                        </li>
+	                        <li className="rounded-[18px] bg-white/72 px-4 py-3">
+	                          Unexpected：{gift.why_unexpected}
+	                        </li>
+	                        <li className="rounded-[18px] bg-white/72 px-4 py-3">
+	                          Novelty：{gift.why_novel}
+	                        </li>
+	                        <li className="rounded-[18px] bg-white/72 px-4 py-3">
+	                          定制：{gift.customization_level}
+	                        </li>
                         <li className="rounded-[18px] bg-white/72 px-4 py-3">
                           寄送：{gift.shipping_ease}
                         </li>

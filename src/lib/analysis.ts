@@ -11,7 +11,7 @@ import {
   normalizeLinks,
   stripLinksFromCustomerInput,
 } from "./customer-input";
-import { resolveOpenAIConfig } from "./openai-config";
+import { resolveOpenAIConfig, shouldSkipOpenAI } from "./openai-config";
 import type {
   AnalysisConfidence,
   AnalyzeResponse,
@@ -41,6 +41,7 @@ interface FetchedSource {
   title?: string;
   evidence: string;
   content: string;
+  quality: "strong" | "weak";
 }
 
 interface FallbackProfile {
@@ -49,8 +50,17 @@ interface FallbackProfile {
   summary_hint: string;
   keywords: string[];
   evidence_hint: string;
-  gifts: Record<BudgetTier, [string, string, string]>;
+  gifts: Record<BudgetTier, [FallbackGiftBlueprint, FallbackGiftBlueprint, FallbackGiftBlueprint]>;
   cautions: [string, string, string];
+}
+
+interface FallbackGiftBlueprint {
+  name: string;
+  item_type: string;
+  components: [string, string, string?];
+  anchor_tags: string[];
+  unexpected_hook: string;
+  novelty_hook: string;
 }
 
 interface CustomerProfileContext {
@@ -64,6 +74,7 @@ interface CustomerProfileContext {
   confidence: AnalysisConfidence;
   gaps: string[];
   evidence_highlights: string[];
+  recipient_anchors: string[];
   recipient_role: string;
   target_region: string;
   matched_profile: FallbackProfile;
@@ -71,7 +82,7 @@ interface CustomerProfileContext {
 
 const SOURCE_LIMIT = 5;
 const FETCH_TIMEOUT_MS = 8_000;
-const AI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS ?? 55_000);
+const AI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS ?? 18_000);
 const MAX_SOURCE_CHARS = 2_200;
 const AI_SOURCE_LIMIT = 3;
 const AI_SOURCE_EVIDENCE_MAX_CHARS = 900;
@@ -104,10 +115,36 @@ const HUMAN_LABEL_KEYWORDS: Record<string, string[]> = {
   品牌升级: ["brand", "design", "campaign"],
 };
 
+function createGiftBlueprint(input: {
+  name: string;
+  itemType: string;
+  components: [string, string, string?];
+  anchorTags: string[];
+  unexpectedHook: string;
+  noveltyHook: string;
+}): FallbackGiftBlueprint {
+  return {
+    name: input.name,
+    item_type: input.itemType,
+    components: input.components,
+    anchor_tags: input.anchorTags,
+    unexpected_hook: input.unexpectedHook,
+    novelty_hook: input.noveltyHook,
+  };
+}
+
 const DECISION_SYSTEM_PROMPT = `
 你是一个给中国外贸业务员使用的商务送礼决策助手。
 
 你的目标不是展示分析能力，而是帮助业务员在特定场景下尽快做决定并执行。
+
+你这次必须严格按 serendipity 逻辑来生成礼物。这里的 serendipity 不是“猎奇”，而是同时满足：
+- Relevant：和这个客户的公司、岗位、当前业务语境或人的线索真的相关
+- Unexpected：不是客户一眼就会觉得“又是常规商务礼物”的东西
+- Novelty：对客户来说有一点新鲜感，但又不至于冒犯、太私人或太难解释
+
+最终主推荐必须先经过这三个维度，再加一道商务可执行性判断：
+- Business Fit：预算、寄送、审批、定制、交期都讲得通
 
 输入会包含：
 - 客户公开资料提炼出的画像
@@ -123,7 +160,8 @@ const DECISION_SYSTEM_PROMPT = `
 
 你必须遵守：
 - 只返回 1 个主推荐和 2 个备选。
-- 主推荐优先考虑“现在就能送、容易执行、不会翻车”，不是追求最花哨。
+- 主推荐不能只因为安全就胜出。它必须同时证明自己为什么 relevant、unexpected、novel，然后才因为 business fit 成为最终答案。
+- 主推荐优先考虑“现在就能送、容易执行、不会翻车”，但不能退化成普通目录货。
 - 礼物名称必须是现实里可以采购的具体品类，不能写成抽象创意概念。
 - 礼物要可寄送、可携带、文化风险低、海关风险低。
 - 避免常见套路礼物，如钢笔、茶叶、保温杯、U 盘、通用名片夹。
@@ -134,6 +172,8 @@ const DECISION_SYSTEM_PROMPT = `
 - 如果提供了目标国家或地区，要优先规避当地清关、重量、文化表达上的常见风险。
 - 如果提供了性格、爱好、最近聊天片段、业务员印象，你必须优先使用这些“人的线索”，不要只停留在公司层面的泛泛判断。
 - 人的线索可以让礼物更像“为他挑的”，但仍要保持商务边界，不要过度私人化。
+- 如果信息不足，允许 unexpected 和 novelty 做得更克制，但不能不解释。
+- 你要优先寻找“对方会觉得你观察到了什么”的切入点，而不是“什么礼物最体面”。
 
 JSON 结构必须严格如下：
 {
@@ -141,7 +181,12 @@ JSON 结构必须严格如下：
   "primary_recommendation": {
     "name": "string",
     "item_type": "string",
+    "gift_components": ["string"],
     "reason": "string",
+    "why_relevant": "string",
+    "why_unexpected": "string",
+    "why_novel": "string",
+    "business_fit": "string",
     "why_now": "string",
     "budget_fit": "string",
     "target_unit_price": "string",
@@ -165,7 +210,12 @@ JSON 结构必须严格如下：
     {
       "name": "string",
       "item_type": "string",
+      "gift_components": ["string"],
       "reason": "string",
+      "why_relevant": "string",
+      "why_unexpected": "string",
+      "why_novel": "string",
+      "business_fit": "string",
       "why_now": "string",
       "budget_fit": "string",
       "target_unit_price": "string",
@@ -190,6 +240,11 @@ JSON 结构必须严格如下：
 - procurement_brief 是业务员直接拿去和采购或供应商沟通的执行摘要
 - follow_up_message 是业务员在当前送礼场景下可参考的中文跟进话术
 - cta_message 长度不超过 24 个汉字
+- why_relevant 要说明它和客户/岗位/人的线索具体对应在哪里，不能只说“比较适合”
+- why_unexpected 要解释它为什么不是套模板的常规礼物，但仍然商务安全
+- why_novel 要解释它对对方可能的新鲜感来自哪里，不能写空话
+- business_fit 要把审批、预算、寄送、交期或定制上的现实可执行性说清楚
+- gift_components 要写成这份礼物实际由哪几个部分组成，优先 2 到 4 个组件
 - target_unit_price 要写清单份建议价格区间
 - lead_time 要写清现货和轻定制的大致交期
 - customization_level 要明确是否建议刻字/定制包装
@@ -213,19 +268,82 @@ const FALLBACK_PROFILES: FallbackProfile[] = [
     evidence_hint: "当前公开信息有限，更适合走稳妥但有记忆点的商务礼物路线。",
     gifts: {
       "100_300_cny": [
-        "品牌线索便携卡片礼套",
-        "客户城市主题金属书签",
-        "行业故事折页小册",
+        createGiftBlueprint({
+          name: "品牌主题金属书签礼套",
+          itemType: "金属书签类",
+          components: ["金属书签", "品牌观察说明卡", "薄信封套"],
+          anchorTags: ["品牌感", "专业表达", "轻量不出错"],
+          unexpectedHook: "不是常见目录式赠品，而是把客户当下的品牌表达压缩成一个很轻的小物件。",
+          noveltyHook: "新鲜感来自它像你做过一轮品牌观察，而不是随手买了一个通用品。",
+        }),
+        createGiftBlueprint({
+          name: "压纹便携卡包礼套",
+          itemType: "轻量商务礼品",
+          components: ["压纹便携卡包", "品牌故事卡", "薄包装盒"],
+          anchorTags: ["专业感", "日常会用", "不夸张"],
+          unexpectedHook: "比通用名片夹更克制，也不会像促销品。",
+          noveltyHook: "新鲜感来自材质和压纹细节，而不是靠大面积定制制造存在感。",
+        }),
+        createGiftBlueprint({
+          name: "独立设计纸品礼套",
+          itemType: "纸品 / 出版物类",
+          components: ["独立设计纸品", "短说明卡", "薄外封"],
+          anchorTags: ["表达感", "专业判断", "轻巧好带"],
+          unexpectedHook: "比一般商务文具更有观察感，但又不跨到过于私人。",
+          noveltyHook: "新鲜感来自内容与纸张选择，而不是礼盒体积。",
+        }),
       ],
       "300_800_cny": [
-        "客户线索定制桌面礼片",
-        "客户城市线稿黄铜书挡",
-        "独立出版主题小礼盒",
+        createGiftBlueprint({
+          name: "黄铜桌面名片托礼盒",
+          itemType: "桌面摆件类",
+          components: ["黄铜名片托", "品牌观察说明卡", "轻礼盒"],
+          anchorTags: ["桌面使用场景", "专业感", "来访可带走"],
+          unexpectedHook: "它比通用办公礼更有克制的质感，但不会重到像摆阔。",
+          noveltyHook: "新鲜感来自桌面使用场景和你对客户职业身份的匹配判断。",
+        }),
+        createGiftBlueprint({
+          name: "石材桌面纸镇礼套",
+          itemType: "桌面摆件类",
+          components: ["石材纸镇", "定制外卡", "简洁内托"],
+          anchorTags: ["稳定感", "克制", "办公场景"],
+          unexpectedHook: "它不是常规目录货，更像一个被认真挑过的桌面器物。",
+          noveltyHook: "新鲜感来自材质触感和桌面留存感，而不是 logo 定制。",
+        }),
+        createGiftBlueprint({
+          name: "独立设计文具礼盒",
+          itemType: "轻量礼盒类",
+          components: ["设计文具单品", "短说明卡", "礼盒外封"],
+          anchorTags: ["专业表达", "轻礼盒", "易审批"],
+          unexpectedHook: "比普通文具更像一种审美判断，而不是行政采购。",
+          noveltyHook: "新鲜感来自组合方式和说明逻辑，不是堆数量。",
+        }),
       ],
       "800_1500_cny": [
-        "定制品牌语境桌面礼盒",
-        "客户城市主题黄铜摆件",
-        "行业故事册与桌面器物组合",
+        createGiftBlueprint({
+          name: "黄铜桌面器物礼盒",
+          itemType: "轻量礼盒类",
+          components: ["黄铜桌面器物", "品牌观察卡", "硬盒"],
+          anchorTags: ["高质感", "判断力", "克制高级"],
+          unexpectedHook: "它会让人感觉你在挑一件会留在桌上的物件，而不是一次性礼物。",
+          noveltyHook: "新鲜感来自器物感和留存感，比高价但没记忆点的礼盒更有效。",
+        }),
+        createGiftBlueprint({
+          name: "皮质卡包与桌面托盘套装",
+          itemType: "轻量礼盒类",
+          components: ["皮质卡包", "桌面托盘", "说明卡"],
+          anchorTags: ["日常使用", "专业场景", "高级但不夸张"],
+          unexpectedHook: "它不是典型成套商务赠品，而是偏向个人工作场景的组合。",
+          noveltyHook: "新鲜感来自两个小件之间的使用关系，而不是单个高客单品。",
+        }),
+        createGiftBlueprint({
+          name: "设计文具与出版物组合礼盒",
+          itemType: "轻量礼盒类",
+          components: ["设计文具", "小型出版物", "礼盒外封"],
+          anchorTags: ["内容感", "审美感", "表达层次"],
+          unexpectedHook: "它不靠价格压人，而是靠内容和表达层次被记住。",
+          noveltyHook: "新鲜感来自器物和内容的并置，比纯摆件更有故事。",
+        }),
       ],
     },
     cautions: [
@@ -254,19 +372,82 @@ const FALLBACK_PROFILES: FallbackProfile[] = [
     evidence_hint: "更适合送能体现审美判断、材质感和观察力的礼物，而不是通用商务品。",
     gifts: {
       "100_300_cny": [
-        "品牌色与材质小样礼套",
-        "客户城市线稿金属书签",
-        "独立视觉书票卡",
+        createGiftBlueprint({
+          name: "品牌色金属书签礼套",
+          itemType: "金属书签类",
+          components: ["品牌色书签", "纸卡", "薄封套"],
+          anchorTags: ["颜色敏感", "审美表达", "轻礼"],
+          unexpectedHook: "它不是常规书签，而是把客户品牌语气转成了一个克制的小礼物。",
+          noveltyHook: "新鲜感来自颜色和材质的呼应，而不是大面积品牌化。",
+        }),
+        createGiftBlueprint({
+          name: "材质样片卡套",
+          itemType: "纸品 / 出版物类",
+          components: ["材质样片卡", "说明小卡", "收纳卡套"],
+          anchorTags: ["材质敏感", "观察力", "低调"],
+          unexpectedHook: "它更像是在回应对方对材质和细节的敏感，而不是送一个通用品。",
+          noveltyHook: "新鲜感来自触感体验和观察逻辑，容易让对方觉得你做了功课。",
+        }),
+        createGiftBlueprint({
+          name: "独立视觉纸品礼套",
+          itemType: "纸品 / 出版物类",
+          components: ["独立视觉纸品", "短说明卡", "薄外封"],
+          anchorTags: ["内容感", "视觉语言", "不俗气"],
+          unexpectedHook: "它比普通设计文具更像一个明确的审美判断。",
+          noveltyHook: "新鲜感来自内容选择，而不是礼物本身的贵重感。",
+        }),
       ],
       "300_800_cny": [
-        "品牌语言定制色票卡与材料样本盒",
-        "客户总部城市线稿黄铜桌面摆件",
-        "独立出版视觉期刊与策展书签礼套",
+        createGiftBlueprint({
+          name: "材质样片礼盒",
+          itemType: "轻量礼盒类",
+          components: ["材质样片组", "说明卡", "轻礼盒"],
+          anchorTags: ["材质", "陈列", "审美判断"],
+          unexpectedHook: "它不是典型商务礼物，而是明显回应了对方对材质和陈列语言的关注。",
+          noveltyHook: "新鲜感来自可触摸的材质体验，比抽象地讲设计更有效。",
+        }),
+        createGiftBlueprint({
+          name: "黄铜桌面摆件礼套",
+          itemType: "桌面摆件类",
+          components: ["黄铜摆件", "城市主题外卡", "薄礼盒"],
+          anchorTags: ["桌面陈列", "材质感", "低调高级"],
+          unexpectedHook: "它不是旅游纪念品式的城市元素，而是克制地借城市语境做了一点连接。",
+          noveltyHook: "新鲜感来自材质和陈列场景，比纯出版物更有停留感。",
+        }),
+        createGiftBlueprint({
+          name: "独立设计出版物礼盒",
+          itemType: "轻量礼盒类",
+          components: ["设计出版物", "短说明卡", "礼盒外封"],
+          anchorTags: ["阅读感", "内容感", "审美判断"],
+          unexpectedHook: "它不会显得像展会礼盒，更像你真的理解对方在意内容和语气。",
+          noveltyHook: "新鲜感来自内容本身，而不是只靠器物堆砌高级感。",
+        }),
       ],
       "800_1500_cny": [
-        "品牌语言定制材料礼盒",
-        "客户总部城市黄铜摆件礼盒",
-        "独立出版视觉期刊组合礼盒",
+        createGiftBlueprint({
+          name: "材质样片与黄铜桌面器物礼盒",
+          itemType: "轻量礼盒类",
+          components: ["材质样片组", "黄铜桌面器物", "说明卡"],
+          anchorTags: ["材质敏感", "陈列", "高级但克制"],
+          unexpectedHook: "它不是纯摆件，也不是纯样本，而是把审美和触感体验做成一个组合。",
+          noveltyHook: "新鲜感来自‘可触摸的材质判断 + 可留存的桌面器物’这对组合。",
+        }),
+        createGiftBlueprint({
+          name: "黄铜摆件与出版物组合礼盒",
+          itemType: "轻量礼盒类",
+          components: ["黄铜摆件", "小型出版物", "礼盒外封"],
+          anchorTags: ["内容", "器物", "表达层次"],
+          unexpectedHook: "它不只是摆件，更像你在替对方组合一个有语气的桌面场景。",
+          noveltyHook: "新鲜感来自内容和器物之间的关系，而不是单件高价。",
+        }),
+        createGiftBlueprint({
+          name: "高质感设计文具礼盒",
+          itemType: "轻量礼盒类",
+          components: ["设计文具单品", "说明卡", "礼盒外封"],
+          anchorTags: ["日常使用", "设计感", "易落地"],
+          unexpectedHook: "它比一般文具礼盒更克制，能保留一点设计判断，但不过度用力。",
+          noveltyHook: "新鲜感来自细节和搭配，而不是夸张包装。",
+        }),
       ],
     },
     cautions: [
@@ -296,19 +477,82 @@ const FALLBACK_PROFILES: FallbackProfile[] = [
     evidence_hint: "更适合送带有结构感、工具感或系统思维隐喻的礼物。",
     gifts: {
       "100_300_cny": [
-        "产品语言解构卡片礼套",
-        "总部城市地形金属书签",
-        "逻辑谜题折页套装",
+        createGiftBlueprint({
+          name: "极简金属书签礼套",
+          itemType: "金属书签类",
+          components: ["极简金属书签", "逻辑卡片", "薄封套"],
+          anchorTags: ["理性", "结构感", "轻量"],
+          unexpectedHook: "它不是通用办公用品，而是更像回应对方理性和系统化表达的小物件。",
+          noveltyHook: "新鲜感来自结构感和信息感，而不是夸张包装。",
+        }),
+        createGiftBlueprint({
+          name: "便携工具感纸品套装",
+          itemType: "纸品 / 出版物类",
+          components: ["工具感纸品", "说明卡", "薄外封"],
+          anchorTags: ["效率", "工具感", "低风险"],
+          unexpectedHook: "它避开了数码配件那种廉价感，转而用纸品表达工具性。",
+          noveltyHook: "新鲜感来自使用语境，而不是把礼物做成科技周边。",
+        }),
+        createGiftBlueprint({
+          name: "结构线稿桌面小卡套",
+          itemType: "轻量商务礼品",
+          components: ["结构线稿卡套", "短说明卡", "轻包装"],
+          anchorTags: ["结构感", "工程感", "轻巧"],
+          unexpectedHook: "它不重，也不俗，但能让对方感到你有意识地回应了工程和结构线索。",
+          noveltyHook: "新鲜感来自图形逻辑和桌面场景的结合。",
+        }),
       ],
       "300_800_cny": [
-        "产品语言定制的机械解构桌面摆件",
-        "总部城市地形纹理金属纸镇",
-        "工程师向独立工具卡组或逻辑谜题礼盒",
+        createGiftBlueprint({
+          name: "金属桌面纸镇礼套",
+          itemType: "桌面摆件类",
+          components: ["金属纸镇", "结构说明卡", "简洁包装"],
+          anchorTags: ["桌面使用", "理性", "稳定感"],
+          unexpectedHook: "它不是普通摆件，而是借桌面器物回应对方的理性和结构偏好。",
+          noveltyHook: "新鲜感来自手感和长期留桌的使用场景。",
+        }),
+        createGiftBlueprint({
+          name: "极简桌面摆件礼套",
+          itemType: "桌面摆件类",
+          components: ["极简摆件", "工程风包装卡", "薄礼盒"],
+          anchorTags: ["极简", "工程感", "商务安全"],
+          unexpectedHook: "它比传统商务礼物更有态度，但不会像创意礼物那样失控。",
+          noveltyHook: "新鲜感来自极简器物和工程语气之间的连接。",
+        }),
+        createGiftBlueprint({
+          name: "逻辑谜题桌面礼盒",
+          itemType: "轻量礼盒类",
+          components: ["逻辑谜题件", "说明卡", "礼盒外封"],
+          anchorTags: ["互动感", "理性趣味", "记忆点"],
+          unexpectedHook: "它会让对方觉得你不是在送礼品目录，而是在送一个能被记住的思路。",
+          noveltyHook: "新鲜感来自一点点可参与感，但仍然保持商务边界。",
+        }),
       ],
       "800_1500_cny": [
-        "产品语言定制机械桌面礼盒",
-        "总部城市地形黄铜纸镇礼盒",
-        "工程工具卡组与收纳盒组合",
+        createGiftBlueprint({
+          name: "黄铜纸镇与工具感礼盒",
+          itemType: "轻量礼盒类",
+          components: ["黄铜纸镇", "工具感说明卡", "硬盒"],
+          anchorTags: ["高质感", "理性", "器物感"],
+          unexpectedHook: "它不是廉价科技风周边，而是把理性气质落到一个能留桌的器物上。",
+          noveltyHook: "新鲜感来自金属器物和工具感叙事的结合。",
+        }),
+        createGiftBlueprint({
+          name: "桌面摆件与逻辑卡组礼盒",
+          itemType: "轻量礼盒类",
+          components: ["桌面摆件", "逻辑卡组", "礼盒外封"],
+          anchorTags: ["内容", "桌面场景", "结构感"],
+          unexpectedHook: "它比单独摆件多了一层内容关系，更像专门为这个人搭过。",
+          noveltyHook: "新鲜感来自器物和卡组之间的组合感。",
+        }),
+        createGiftBlueprint({
+          name: "工程风桌面器物套装",
+          itemType: "轻量礼盒类",
+          components: ["桌面器物", "结构说明卡", "套装包装"],
+          anchorTags: ["工程感", "克制", "高可执行"],
+          unexpectedHook: "它不会像技术周边那样俗，却能让工程背景的人感到被理解。",
+          noveltyHook: "新鲜感来自工程语气被翻译成日常器物。",
+        }),
       ],
     },
     cautions: [
@@ -336,19 +580,82 @@ const FALLBACK_PROFILES: FallbackProfile[] = [
     evidence_hint: "更适合送能把材料故事、责任感和长期主义做成具体体验的礼物。",
     gifts: {
       "100_300_cny": [
-        "再生材料故事卡礼套",
-        "植物纹理压印书签",
-        "小众环保材料折页册",
+        createGiftBlueprint({
+          name: "再生材质金属书签礼套",
+          itemType: "金属书签类",
+          components: ["再生材质书签", "材料故事卡", "薄封套"],
+          anchorTags: ["责任感", "长期主义", "轻量"],
+          unexpectedHook: "它不是泛环保周边，而是把可持续材料做成一个克制的小物件。",
+          noveltyHook: "新鲜感来自材料故事本身，而不是口号。",
+        }),
+        createGiftBlueprint({
+          name: "环保材质样片卡套",
+          itemType: "纸品 / 出版物类",
+          components: ["环保材质样片卡", "说明卡", "卡套"],
+          anchorTags: ["材料关注", "触感体验", "观察力"],
+          unexpectedHook: "它不是在喊环保，而是在让对方摸到你为什么选它。",
+          noveltyHook: "新鲜感来自可触摸的材料体验，比一般理念类礼物更具体。",
+        }),
+        createGiftBlueprint({
+          name: "可持续主题纸品礼套",
+          itemType: "纸品 / 出版物类",
+          components: ["主题纸品", "短说明卡", "薄外封"],
+          anchorTags: ["克制表达", "低风险", "易传播"],
+          unexpectedHook: "它比普通纸品多了一层理念回应，但又不显得 preachy。",
+          noveltyHook: "新鲜感来自你把理念压缩成可留存的小内容。",
+        }),
       ],
       "300_800_cny": [
-        "再生材料故事卡与工艺标本盒",
-        "植物纹理压印桌面托盘",
-        "小众可持续材料样本册",
+        createGiftBlueprint({
+          name: "环保材质样片礼盒",
+          itemType: "轻量礼盒类",
+          components: ["环保材质样片", "材料故事卡", "轻礼盒"],
+          anchorTags: ["材料判断", "Buyer 友好", "好解释"],
+          unexpectedHook: "它不像常规商务礼盒，更像你在回应对方最近关心的材料判断。",
+          noveltyHook: "新鲜感来自‘你真的注意到我在看什么材料’这层感觉。",
+        }),
+        createGiftBlueprint({
+          name: "再生材质桌面托盘礼套",
+          itemType: "桌面收纳类",
+          components: ["再生材质托盘", "说明卡", "简洁包装"],
+          anchorTags: ["桌面场景", "责任感", "日常可用"],
+          unexpectedHook: "它不是廉价环保周边，而是一个能日常使用的克制器物。",
+          noveltyHook: "新鲜感来自责任感被做成可用物件，而不是概念说明。",
+        }),
+        createGiftBlueprint({
+          name: "可持续材料展示册礼盒",
+          itemType: "轻量礼盒类",
+          components: ["材料展示册", "短说明卡", "礼盒外封"],
+          anchorTags: ["内容感", "材料导向", "可传播"],
+          unexpectedHook: "它比纯样片更完整，也比纯摆件更贴近对方当下关注点。",
+          noveltyHook: "新鲜感来自把材料故事讲成了一个完整的小组合。",
+        }),
       ],
       "800_1500_cny": [
-        "再生材料样本礼盒",
-        "植物纹理桌面托盘套装",
-        "可持续材料样本册礼盒",
+        createGiftBlueprint({
+          name: "再生材质桌面器物礼盒",
+          itemType: "轻量礼盒类",
+          components: ["再生材质器物", "说明卡", "硬盒"],
+          anchorTags: ["高级感", "责任感", "桌面留存"],
+          unexpectedHook: "它不是把环保做廉价，而是把责任感做得有质感。",
+          noveltyHook: "新鲜感来自对方会发现‘可持续’也可以不说教。",
+        }),
+        createGiftBlueprint({
+          name: "材质样片与托盘组合礼盒",
+          itemType: "轻量礼盒类",
+          components: ["材质样片", "桌面托盘", "说明卡"],
+          anchorTags: ["触感", "使用场景", "组合感"],
+          unexpectedHook: "它比单独器物或单独样片都更像一套认真搭过的礼物。",
+          noveltyHook: "新鲜感来自样片和器物之间形成的完整体验。",
+        }),
+        createGiftBlueprint({
+          name: "可持续材料展示礼盒",
+          itemType: "轻量礼盒类",
+          components: ["材料展示件", "说明册", "礼盒外封"],
+          anchorTags: ["内容表达", "理念落地", "易沟通"],
+          unexpectedHook: "它让对方看到的不是环保话术，而是具体材料判断。",
+          noveltyHook: "新鲜感来自理念被翻译成可以打开、触摸、解释的礼物。",
+        }),
       ],
     },
     cautions: [
@@ -377,19 +684,82 @@ const FALLBACK_PROFILES: FallbackProfile[] = [
     evidence_hint: "更适合送有工艺感、结构感和材质触感的礼物。",
     gifts: {
       "100_300_cny": [
-        "核心工艺剖面卡片礼套",
-        "工业材质金属书签",
-        "工艺演化折页册",
+        createGiftBlueprint({
+          name: "工业风金属书签礼套",
+          itemType: "金属书签类",
+          components: ["工业风书签", "工艺卡", "薄封套"],
+          anchorTags: ["工艺感", "结构感", "轻礼"],
+          unexpectedHook: "它不是粗糙工业零件，而是把工艺感做得克制可送。",
+          noveltyHook: "新鲜感来自工艺语气被压缩成一个精致的小件。",
+        }),
+        createGiftBlueprint({
+          name: "材质触感样片卡套",
+          itemType: "纸品 / 出版物类",
+          components: ["材质触感卡", "说明卡", "卡套"],
+          anchorTags: ["材料判断", "触感", "专业线索"],
+          unexpectedHook: "它不是普通色卡，而是直接回应对方对工艺和材质的敏感。",
+          noveltyHook: "新鲜感来自可上手的触感，而不是概念文案。",
+        }),
+        createGiftBlueprint({
+          name: "工艺说明纸品礼套",
+          itemType: "纸品 / 出版物类",
+          components: ["工艺纸品", "说明卡", "薄外封"],
+          anchorTags: ["内容感", "工艺叙事", "低风险"],
+          unexpectedHook: "它比普通文具更像对制造背景的一次回应。",
+          noveltyHook: "新鲜感来自工艺被做成可留存的小内容。",
+        }),
       ],
       "300_800_cny": [
-        "核心工艺灵感的微型剖面摆件",
-        "工业材质拼接名片托与说明卡",
-        "工艺演化小册与材料触感套件",
+        createGiftBlueprint({
+          name: "工业材质名片托礼套",
+          itemType: "桌面摆件类",
+          components: ["工业材质名片托", "说明卡", "简洁包装"],
+          anchorTags: ["桌面使用", "工艺感", "专业场景"],
+          unexpectedHook: "它不是粗犷工业件，而是有控制感的专业桌面器物。",
+          noveltyHook: "新鲜感来自材质和职业场景之间的贴合。",
+        }),
+        createGiftBlueprint({
+          name: "金属桌面摆件工艺礼套",
+          itemType: "桌面摆件类",
+          components: ["金属摆件", "工艺故事卡", "薄礼盒"],
+          anchorTags: ["结构感", "工艺故事", "克制"],
+          unexpectedHook: "它不靠 logo 和包装堆价值，而是靠工艺语境建立记忆点。",
+          noveltyHook: "新鲜感来自一个小器物背后的工艺解释。",
+        }),
+        createGiftBlueprint({
+          name: "材料触感礼盒",
+          itemType: "轻量礼盒类",
+          components: ["材料触感件", "说明卡", "礼盒外封"],
+          anchorTags: ["材质", "触感", "Buyer 友好"],
+          unexpectedHook: "它更像给懂制造的人看的礼物，不是给大众看的商务套盒。",
+          noveltyHook: "新鲜感来自可触摸的材料表达。",
+        }),
       ],
       "800_1500_cny": [
-        "核心工艺微型桌面礼盒",
-        "工业材质拼接桌面摆件",
-        "工艺演化册与材质套件礼盒",
+        createGiftBlueprint({
+          name: "工业材质桌面器物礼盒",
+          itemType: "轻量礼盒类",
+          components: ["工业材质器物", "说明卡", "硬盒"],
+          anchorTags: ["器物感", "工艺感", "高质感"],
+          unexpectedHook: "它比常规礼盒更像一个会被懂工艺的人留下来的物件。",
+          noveltyHook: "新鲜感来自工艺能力被转译成桌面器物，而不是零件隐喻。",
+        }),
+        createGiftBlueprint({
+          name: "金属摆件与材质卡组合礼盒",
+          itemType: "轻量礼盒类",
+          components: ["金属摆件", "材质卡", "礼盒外封"],
+          anchorTags: ["组合感", "内容层次", "触感"],
+          unexpectedHook: "它不是单一器物，而是把工艺观察和触感组合到一起。",
+          noveltyHook: "新鲜感来自器物和材质卡形成的完整理解链条。",
+        }),
+        createGiftBlueprint({
+          name: "工艺主题桌面礼盒",
+          itemType: "轻量礼盒类",
+          components: ["桌面器物", "工艺说明卡", "礼盒外封"],
+          anchorTags: ["稳定交付", "结构感", "专业感"],
+          unexpectedHook: "它不会像技术说明书，也不会像零件纪念品，更容易被高级客户接受。",
+          noveltyHook: "新鲜感来自工艺主题被做成了可日用的桌面礼。",
+        }),
       ],
     },
     cautions: [
@@ -417,19 +787,82 @@ const FALLBACK_PROFILES: FallbackProfile[] = [
     evidence_hint: "更适合送带有文化感、空间感或日常仪式感的礼物。",
     gifts: {
       "100_300_cny": [
-        "风味地图纸卡礼套",
-        "门店城市插画书签",
-        "饮食文化小册",
+        createGiftBlueprint({
+          name: "城市主题杯垫礼套",
+          itemType: "轻量商务礼品",
+          components: ["城市主题杯垫", "短故事卡", "薄封套"],
+          anchorTags: ["空间感", "生活方式", "轻量"],
+          unexpectedHook: "它不是直接送食品，而是用空间和生活方式语言去回应对方。",
+          noveltyHook: "新鲜感来自把饮食文化翻译成日常桌面小物。",
+        }),
+        createGiftBlueprint({
+          name: "插画金属书签礼套",
+          itemType: "金属书签类",
+          components: ["插画书签", "故事卡", "薄封套"],
+          anchorTags: ["文化感", "内容感", "好带"],
+          unexpectedHook: "它比普通文创小物更克制，能传达你观察到对方的品牌氛围。",
+          noveltyHook: "新鲜感来自插画和故事语气，而不是网红感。",
+        }),
+        createGiftBlueprint({
+          name: "饮食文化纸品礼套",
+          itemType: "纸品 / 出版物类",
+          components: ["文化纸品", "短说明卡", "薄外封"],
+          anchorTags: ["内容", "文化", "不送食品"],
+          unexpectedHook: "它避开了食品运输风险，但仍然保留了生活方式语境。",
+          noveltyHook: "新鲜感来自文化内容，而不是食物本身。",
+        }),
       ],
       "300_800_cny": [
-        "风味地图灵感的桌面闻香卡礼套",
-        "门店所在城市插画杯垫礼盒",
-        "独立出版饮食文化小册与书票",
+        createGiftBlueprint({
+          name: "城市主题杯垫礼盒",
+          itemType: "轻量礼盒类",
+          components: ["城市主题杯垫", "短故事卡", "礼盒外封"],
+          anchorTags: ["空间", "日常使用", "轻礼盒"],
+          unexpectedHook: "它不是旅游纪念品式城市元素，而是用空间语气做连接。",
+          noveltyHook: "新鲜感来自日常使用场景，比摆设更自然。",
+        }),
+        createGiftBlueprint({
+          name: "桌面闻香卡礼盒",
+          itemType: "轻量礼盒类",
+          components: ["闻香卡", "说明卡", "轻礼盒"],
+          anchorTags: ["氛围感", "体验", "不送液体"],
+          unexpectedHook: "它避开了香氛液体类风险，却保留了一点气味和空间联想。",
+          noveltyHook: "新鲜感来自体验感，而不是物件贵重感。",
+        }),
+        createGiftBlueprint({
+          name: "饮食文化出版物礼盒",
+          itemType: "轻量礼盒类",
+          components: ["文化出版物", "短说明卡", "礼盒外封"],
+          anchorTags: ["内容感", "生活方式", "克制"],
+          unexpectedHook: "它不直接送食品，但仍然回应了对方的生活方式文化语境。",
+          noveltyHook: "新鲜感来自内容本身，比常规器物更容易引发交流。",
+        }),
       ],
       "800_1500_cny": [
-        "风味地图桌面礼盒",
-        "门店城市插画桌面杯垫套装",
-        "饮食文化册与空间礼物组合",
+        createGiftBlueprint({
+          name: "城市主题桌面杯垫礼盒",
+          itemType: "轻量礼盒类",
+          components: ["桌面杯垫", "城市主题卡", "硬盒"],
+          anchorTags: ["空间体验", "日常使用", "低调"],
+          unexpectedHook: "它不会像餐饮周边，却保留了生活方式品牌的空间感。",
+          noveltyHook: "新鲜感来自城市叙事和桌面器物的结合。",
+        }),
+        createGiftBlueprint({
+          name: "闻香卡与桌面托盘组合礼盒",
+          itemType: "轻量礼盒类",
+          components: ["闻香卡", "桌面托盘", "说明卡"],
+          anchorTags: ["空间", "体验", "组合感"],
+          unexpectedHook: "它不是单一器物，而是把空间体验和日常放置场景结合起来。",
+          noveltyHook: "新鲜感来自嗅觉联想和桌面使用的双重体验。",
+        }),
+        createGiftBlueprint({
+          name: "饮食文化与器物组合礼盒",
+          itemType: "轻量礼盒类",
+          components: ["文化出版物", "小型器物", "礼盒外封"],
+          anchorTags: ["内容", "器物", "生活方式"],
+          unexpectedHook: "它会让人觉得你理解的是对方品牌氛围，而不只是产品类别。",
+          noveltyHook: "新鲜感来自文化内容和器物并置后的故事感。",
+        }),
       ],
     },
     cautions: [
@@ -457,19 +890,82 @@ const FALLBACK_PROFILES: FallbackProfile[] = [
     evidence_hint: "更适合送路线、节点或全球流动隐喻较强的礼物。",
     gifts: {
       "100_300_cny": [
-        "路线节点卡片礼套",
-        "坐标主题金属书签",
-        "独立地图折页册",
+        createGiftBlueprint({
+          name: "坐标主题金属书签礼套",
+          itemType: "金属书签类",
+          components: ["坐标主题书签", "路线卡片", "薄封套"],
+          anchorTags: ["坐标", "流动性", "轻巧"],
+          unexpectedHook: "它不是交通行业周边，而是把路线感压成了一个克制的小礼物。",
+          noveltyHook: "新鲜感来自坐标和路线隐喻，而不是直白运输元素。",
+        }),
+        createGiftBlueprint({
+          name: "地图折页纸品礼套",
+          itemType: "纸品 / 出版物类",
+          components: ["地图折页", "短说明卡", "薄外封"],
+          anchorTags: ["全球流动", "内容感", "低风险"],
+          unexpectedHook: "它不走宣传册路线，而是借地图语言做一层更轻的连接。",
+          noveltyHook: "新鲜感来自路线叙事，而不是品牌定制。",
+        }),
+        createGiftBlueprint({
+          name: "路线主题桌面小卡套",
+          itemType: "轻量商务礼品",
+          components: ["路线主题卡套", "说明卡", "轻包装"],
+          anchorTags: ["效率", "路线感", "桌面使用"],
+          unexpectedHook: "它比常规办公品多了一层流动性语义，但仍然很轻。",
+          noveltyHook: "新鲜感来自路线主题被放进日常桌面场景。",
+        }),
       ],
       "300_800_cny": [
-        "路线图灵感的金属书挡或纸镇",
-        "港口或城市坐标主题桌面礼片",
-        "全球路线故事卡与独立地图册",
+        createGiftBlueprint({
+          name: "坐标主题桌面纸镇",
+          itemType: "桌面摆件类",
+          components: ["坐标纸镇", "说明卡", "简洁包装"],
+          anchorTags: ["桌面留存", "全球流动", "专业感"],
+          unexpectedHook: "它不是物流宣传品，而是把坐标感做成一个能长期留桌的小器物。",
+          noveltyHook: "新鲜感来自坐标和使用场景之间的连接。",
+        }),
+        createGiftBlueprint({
+          name: "地图主题桌面摆件礼套",
+          itemType: "桌面摆件类",
+          components: ["地图主题摆件", "说明卡", "薄礼盒"],
+          anchorTags: ["路线", "空间感", "记忆点"],
+          unexpectedHook: "它不是复杂地图装饰，而是借地图语言做一个可解释的桌面物件。",
+          noveltyHook: "新鲜感来自路线感被转成器物，而不是图案堆砌。",
+        }),
+        createGiftBlueprint({
+          name: "地图出版物礼盒",
+          itemType: "轻量礼盒类",
+          components: ["地图出版物", "短说明卡", "礼盒外封"],
+          anchorTags: ["内容", "流动性", "易传播"],
+          unexpectedHook: "它比纯摆件更有内容深度，也比普通书册更有送礼感。",
+          noveltyHook: "新鲜感来自内容叙事，而不是纪念品逻辑。",
+        }),
       ],
       "800_1500_cny": [
-        "路线图桌面礼盒",
-        "港口坐标黄铜摆件礼盒",
-        "全球路线册与桌面器物组合",
+        createGiftBlueprint({
+          name: "坐标主题黄铜摆件礼盒",
+          itemType: "轻量礼盒类",
+          components: ["黄铜摆件", "坐标卡", "硬盒"],
+          anchorTags: ["高级感", "坐标隐喻", "桌面留存"],
+          unexpectedHook: "它不是行业周边，而是更克制地回应全球流动这个语境。",
+          noveltyHook: "新鲜感来自黄铜器物和坐标隐喻的叠加。",
+        }),
+        createGiftBlueprint({
+          name: "地图桌面器物礼盒",
+          itemType: "轻量礼盒类",
+          components: ["桌面器物", "地图说明卡", "礼盒外封"],
+          anchorTags: ["路线", "器物感", "商务安全"],
+          unexpectedHook: "它比普通桌面礼更多一层路线感，但不会像营销礼。",
+          noveltyHook: "新鲜感来自内容语境和桌面器物的组合。",
+        }),
+        createGiftBlueprint({
+          name: "路线主题出版物组合礼盒",
+          itemType: "轻量礼盒类",
+          components: ["路线主题出版物", "短说明卡", "礼盒外封"],
+          anchorTags: ["内容层次", "全球流动", "对话感"],
+          unexpectedHook: "它不是单纯器物，而是更像一个会引发对话的礼物。",
+          noveltyHook: "新鲜感来自路线叙事被做成可阅读的组合。",
+        }),
       ],
     },
     cautions: [
@@ -665,6 +1161,12 @@ async function fetchSource(url: string): Promise<FetchedSource> {
     }
 
     const evidence = truncate(cleanText(sections.join("\n\n")), 2_800);
+    const quality = assessSourceQuality({
+      url,
+      kind,
+      title: primary.title,
+      evidence,
+    });
 
     return {
       url,
@@ -673,6 +1175,7 @@ async function fetchSource(url: string): Promise<FetchedSource> {
       title: primary.title,
       evidence,
       content: evidence,
+      quality,
     };
   } catch (error) {
     const message =
@@ -684,8 +1187,59 @@ async function fetchSource(url: string): Promise<FetchedSource> {
       status: "unavailable",
       evidence: `无法提取内容：${message}`,
       content: "",
+      quality: "weak",
     };
   }
+}
+
+function assessSourceQuality(input: {
+  url: string;
+  kind: SourceKind;
+  title: string;
+  evidence: string;
+}): "strong" | "weak" {
+  const hostname = safeHostname(input.url);
+  const pathname = (() => {
+    try {
+      return new URL(input.url).pathname.toLowerCase();
+    } catch {
+      return "/";
+    }
+  })();
+  const title = input.title.toLowerCase();
+  const evidence = input.evidence.toLowerCase();
+
+  if (input.kind === "linkedin") {
+    const genericLinkedin =
+      pathname === "/" ||
+      pathname === "" ||
+      /^\/(company\/)?$/.test(pathname) ||
+      title.includes("领英企业服务") ||
+      title === "linkedin";
+
+    return genericLinkedin ? "weak" : "strong";
+  }
+
+  if (input.kind === "facebook" || input.kind === "instagram") {
+    if (
+      pathname === "/" ||
+      title === hostname ||
+      evidence.includes("log in") ||
+      evidence.includes("signup")
+    ) {
+      return "weak";
+    }
+  }
+
+  if (hostname.includes("linkedin.com") && title.includes("领英企业服务")) {
+    return "weak";
+  }
+
+  if (evidence.length < 120) {
+    return "weak";
+  }
+
+  return "strong";
 }
 
 function parseJsonObject(text: string) {
@@ -709,7 +1263,7 @@ function parseJsonObject(text: string) {
 async function callOpenAIJson(systemPrompt: string, payload: unknown) {
   const config = resolveOpenAIConfig();
 
-  if (!config) {
+  if (!config || shouldSkipOpenAI(config)) {
     throw new Error("OpenAI config is missing");
   }
 
@@ -763,6 +1317,23 @@ async function callOpenAIJson(systemPrompt: string, payload: unknown) {
     : content ?? "";
 
   return parseJsonObject(text);
+}
+
+function isFastFallbackError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+
+  return (
+    message.includes("error code: 1010") ||
+    message.includes("openai 403") ||
+    message.includes("connect timeout") ||
+    message.includes("timed out") ||
+    message.includes("fetch failed") ||
+    message.includes("the operation was aborted due to timeout")
+  );
 }
 
 function pickProfile(sources: FetchedSource[]) {
@@ -825,6 +1396,46 @@ function buildHumanSignalSummary(input: {
   }
 
   return truncate(parts.join("；"), 220);
+}
+
+function buildRecipientAnchors(input: {
+  matchedProfile: FallbackProfile;
+  recipientRole: string;
+  targetRegion: string;
+  personTraits: string[];
+  personInterests: string[];
+  recentChat?: string;
+  personImpression?: string;
+}) {
+  const anchors: string[] = [];
+
+  anchors.push(`客户主线先按「${input.matchedProfile.label}」理解。`);
+
+  if (input.recipientRole !== DEFAULT_RECIPIENT_ROLE) {
+    anchors.push(`收礼人角色是「${input.recipientRole}」。`);
+  }
+
+  if (input.personTraits.length > 0) {
+    anchors.push(`人物气质更偏「${input.personTraits.slice(0, 2).join(" / ")}」。`);
+  }
+
+  if (input.personInterests.length > 0) {
+    anchors.push(`对方最近可能会对「${input.personInterests.slice(0, 2).join(" / ")}」有感觉。`);
+  }
+
+  if (input.recentChat?.trim()) {
+    anchors.push(`最近聊过的点是「${truncate(cleanText(input.recentChat), 38)}」。`);
+  }
+
+  if (input.personImpression?.trim()) {
+    anchors.push(`你的主观印象是「${truncate(cleanText(input.personImpression), 34)}」。`);
+  }
+
+  if (input.targetRegion !== DEFAULT_TARGET_REGION) {
+    anchors.push(`寄送和文化边界按「${input.targetRegion}」来收。`);
+  }
+
+  return anchors.slice(0, 5);
 }
 
 function buildHumanKeywordHints(values: string[]) {
@@ -891,6 +1502,7 @@ function buildManualSource(input: {
     title: input.companyName || "用户输入",
     evidence: sections,
     content: sections,
+    quality: "strong" as const,
   };
 }
 
@@ -904,7 +1516,10 @@ function buildEvidenceHighlights(input: {
 }) {
   const highlights: string[] = [];
   const publicSources = input.sources.filter(
-    (source) => source.url !== MANUAL_SOURCE_URL && source.status === "used",
+    (source) =>
+      source.url !== MANUAL_SOURCE_URL &&
+      source.status === "used" &&
+      source.quality === "strong",
   );
   const titles = publicSources
     .map((source) => source.title)
@@ -956,6 +1571,18 @@ function buildCustomerProfileContext(
   note?: string,
 ): CustomerProfileContext {
   const matchedProfile = pickProfile(sources);
+  const strongPublicSources = sources.filter(
+    (source) =>
+      source.url !== MANUAL_SOURCE_URL &&
+      source.status === "used" &&
+      source.quality === "strong",
+  );
+  const weakPublicSources = sources.filter(
+    (source) =>
+      source.url !== MANUAL_SOURCE_URL &&
+      source.status === "used" &&
+      source.quality === "weak",
+  );
   const titles = sources
     .map((source) => source.title)
     .filter((title): title is string => Boolean(title))
@@ -965,9 +1592,7 @@ function buildCustomerProfileContext(
   ).length;
   const usedKinds = new Set(sources.map((source) => source.kind));
   const manualSource = sources.find((source) => source.url === MANUAL_SOURCE_URL);
-  const publicSourceCount = sources.filter(
-    (source) => source.url !== MANUAL_SOURCE_URL && source.status === "used",
-  ).length;
+  const publicSourceCount = strongPublicSources.length;
   const humanSignal = buildHumanSignalSummary({
     personTraits,
     personInterests,
@@ -989,10 +1614,18 @@ function buildCustomerProfileContext(
     ? ` 并结合你的补充“${truncate(cleanText(note), 44)}”。`
     : "";
   const confidence: AnalysisConfidence =
-    (publicSourceCount >= 2 && unavailableCount === 0) ||
-    (publicSourceCount >= 1 && humanClueCount >= 2 && unavailableCount === 0)
+    (publicSourceCount >= 2 &&
+      unavailableCount === 0 &&
+      weakPublicSources.length === 0) ||
+    (publicSourceCount >= 1 &&
+      humanClueCount >= 2 &&
+      unavailableCount === 0 &&
+      weakPublicSources.length === 0)
       ? "high"
-      : publicSourceCount >= 1 || humanClueCount >= 1 || unavailableCount > 0
+      : publicSourceCount >= 1 ||
+          humanClueCount >= 1 ||
+          unavailableCount > 0 ||
+          weakPublicSources.length > 0
         ? "medium"
         : "low";
   const gaps: string[] = [];
@@ -1003,6 +1636,10 @@ function buildCustomerProfileContext(
 
   if (publicSourceCount > 0 && !usedKinds.has("instagram") && !usedKinds.has("facebook")) {
     gaps.push("本次主要依据官网或公开页面，缺少更强的社媒生活化线索。");
+  }
+
+  if (weakPublicSources.length > 0) {
+    gaps.push("有些社媒或公开链接虽然能打开，但没拿到足够有效内容，这一版判断不能过度自信。");
   }
 
   if (publicSourceCount <= 1) {
@@ -1046,6 +1683,15 @@ function buildCustomerProfileContext(
     humanSignal,
     gaps,
   });
+  const recipientAnchors = buildRecipientAnchors({
+    matchedProfile,
+    recipientRole,
+    targetRegion,
+    personTraits,
+    personInterests,
+    recentChat,
+    personImpression,
+  });
 
   return {
     customer_summary: truncate(
@@ -1061,6 +1707,7 @@ function buildCustomerProfileContext(
     confidence,
     gaps,
     evidence_highlights: evidenceHighlights,
+    recipient_anchors: recipientAnchors,
     recipient_role: recipientRole,
     target_region: targetRegion,
     matched_profile: matchedProfile,
@@ -1073,10 +1720,20 @@ function sanitizeGiftDecision(raw: unknown): GiftIdeaWithReasoning | null {
   }
 
   const item = raw as Record<string, unknown>;
+  const giftComponents = Array.isArray(item.gift_components)
+    ? item.gift_components
+        .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+        .map((value) => truncate(cleanText(value), 60))
+        .slice(0, 4)
+    : [];
   const fields = [
     "name",
     "item_type",
     "reason",
+    "why_relevant",
+    "why_unexpected",
+    "why_novel",
+    "business_fit",
     "why_now",
     "budget_fit",
     "target_unit_price",
@@ -1103,7 +1760,10 @@ function sanitizeGiftDecision(raw: unknown): GiftIdeaWithReasoning | null {
     );
   }
 
-  return output as GiftIdeaWithReasoning;
+  return {
+    ...(output as GiftIdeaWithReasoning),
+    gift_components: giftComponents,
+  };
 }
 
 function sanitizeProcurementBrief(raw: unknown): ProcurementBrief | null {
@@ -1196,6 +1856,7 @@ function sanitizeDecisionPayload(
     analysis_confidence: profile.confidence,
     analysis_gaps: profile.gaps.slice(0, 3),
     evidence_highlights: profile.evidence_highlights,
+    recipient_anchors: profile.recipient_anchors,
     recipient_role: profile.recipient_role,
     target_region: profile.target_region,
     primary_recommendation: primaryRecommendation,
@@ -1236,6 +1897,7 @@ async function generateDecisionWithOpenAI(input: {
         confidence: input.profile.confidence,
         gaps: input.profile.gaps,
         evidence_highlights: input.profile.evidence_highlights,
+        recipient_anchors: input.profile.recipient_anchors,
         recipient_role: input.profile.recipient_role,
         target_region: input.profile.target_region,
       },
@@ -1257,30 +1919,6 @@ async function generateDecisionWithOpenAI(input: {
     }),
     input.profile,
   );
-}
-
-function inferGiftItemType(name: string) {
-  if (/托盘|收纳/.test(name)) {
-    return "桌面收纳类";
-  }
-
-  if (/书签/.test(name)) {
-    return "金属书签类";
-  }
-
-  if (/笔记本|纸卡|小册|期刊|地图册|书票/.test(name)) {
-    return "纸品 / 出版物类";
-  }
-
-  if (/纸镇|书挡|摆件|礼片/.test(name)) {
-    return "桌面摆件类";
-  }
-
-  if (/礼盒|礼套|套装|卡组|样本盒|样本册/.test(name)) {
-    return "轻量礼盒类";
-  }
-
-  return "轻量商务礼品";
 }
 
 function fallbackTargetUnitPrice(
@@ -1503,7 +2141,7 @@ function buildFallbackProcurementBrief(input: {
 }
 
 function buildFallbackGift(
-  name: string,
+  blueprint: FallbackGiftBlueprint,
   position: 0 | 1 | 2,
   profile: CustomerProfileContext,
   occasion: Occasion,
@@ -1511,33 +2149,63 @@ function buildFallbackGift(
 ): GiftIdeaWithReasoning {
   const occasionMeta = getOccasionMeta(occasion);
   const budgetMeta = getBudgetMeta(budgetTier);
+  const roleText =
+    profile.recipient_role === DEFAULT_RECIPIENT_ROLE
+      ? "当前这版主要按通用商务联系人来理解"
+      : `这次重点按「${profile.recipient_role}」这个角色来理解`;
+  const humanText = profile.human_signal
+    ? `同时结合了人的线索：${profile.human_signal}`
+    : "目前缺少更强的人物线索，所以个人化程度做得更克制";
+  const anchorText =
+    profile.recipient_anchors.length > 0
+      ? profile.recipient_anchors.slice(0, 2).join(" ")
+      : `客户当前更偏「${profile.industry_signal}」这条线。`;
+  const unexpectedAngle =
+    position === 0
+      ? blueprint.unexpected_hook
+      : `它避开了和主推荐同一套路，换了一个不同的表达角度。${blueprint.unexpected_hook}`;
+  const noveltyAngle = blueprint.novelty_hook;
+  const businessFit =
+    profile.confidence === "low"
+      ? `虽然这版判断偏保守，但它仍然比常规纪念品更有针对性，而且在 ${budgetMeta.label}、寄送和审批上更容易落地。`
+      : `${roleText}。${humanText}。在 ${budgetMeta.label}、交期、寄送和内部解释上，这套组合更容易执行。`;
 
   return {
-    name,
-    item_type: inferGiftItemType(name),
+    name: blueprint.name,
+    item_type: blueprint.item_type,
+    gift_components: blueprint.components.filter(
+      (component): component is string => Boolean(component),
+    ),
     reason:
       position === 0
-        ? `它最贴合客户当前呈现出的“${profile.industry_signal}”特征，也最容易让对方感受到你做过功课。`
-        : `它仍然围绕客户的“${profile.industry_signal}”线索展开，但角度和主推荐明显不同，适合作为备选。`,
+        ? `它最贴合客户当前呈现出的“${profile.industry_signal}”特征，而且礼物不是单个品类，而是一套更像为这个客户拼出来的组合。`
+        : `它仍然围绕客户的“${profile.industry_signal}”线索展开，但组合方式和主推荐明显不同，适合作为备选。`,
+    why_relevant:
+      position === 0
+        ? `${roleText}，它和客户当前呈现出的「${profile.industry_signal}」最贴近。${anchorText} ${humanText}。`
+        : `它依然和客户当前的「${profile.industry_signal}」相关，不是脱离客户画像硬凑出来的备选。${anchorText}`,
+    why_unexpected: unexpectedAngle,
+    why_novel: noveltyAngle,
+    business_fit: businessFit,
     why_now:
       position === 0
         ? `${occasionMeta.label}这个时点最怕套路和过重，这类礼物更容易自然延续前一次接触的记忆。`
         : `如果你不想走主推荐的路线，这个方向在${occasionMeta.label}里依然成立，而且不容易显得用力过猛。`,
     budget_fit:
       position === 0
-        ? `${budgetMeta.label}更适合做“看得出判断力但不会太重”的礼物，这个选择和当前预算带匹配度最高。`
+        ? `${budgetMeta.label}更适合做“看得出判断力但不会太重”的组合礼物，这个选择和当前预算带匹配度最高。`
         : `${budgetMeta.label}下它依然能成立，但更适合你想保留一点差异化时使用。`,
     target_unit_price: fallbackTargetUnitPrice(budgetTier, position),
-    lead_time: fallbackLeadTime(name),
-    customization_level: fallbackCustomizationLevel(name),
-    shipping_ease: fallbackShippingEase(name, profile.target_region),
-    sourcing_tip: fallbackSourcingTip(name),
+    lead_time: fallbackLeadTime(blueprint.name),
+    customization_level: fallbackCustomizationLevel(blueprint.name),
+    shipping_ease: fallbackShippingEase(blueprint.name, profile.target_region),
+    sourcing_tip: fallbackSourcingTip(blueprint.name),
     approval_hint: fallbackApprovalHint(profile.recipient_role, budgetTier),
     caution: profile.matched_profile.cautions[position],
     message_snippet:
       position === 0
-        ? `如果只先定一个礼物，我会优先选「${name}」，因为它和客户目前的品牌/业务表达最贴近，而且适合现在这个时机。`
-        : `如果主推荐不方便落地，可以改成「${name}」，方向仍然贴合客户，但表达方式会更克制一些。`,
+        ? `如果只先定一个礼物，我会优先选「${blueprint.name}」，因为它不是单一品类，而是一套更贴合客户当下表达和这个时机的组合。`
+        : `如果主推荐不方便落地，可以改成「${blueprint.name}」，方向仍然贴合客户，但表达方式会更克制一些。`,
   };
 }
 
@@ -1565,9 +2233,9 @@ function buildFallbackAnalysis(input: {
 }): AnalyzeResponse {
   const occasionMeta = getOccasionMeta(input.occasion);
   const budgetMeta = getBudgetMeta(input.budgetTier);
-  const giftNames = input.profile.matched_profile.gifts[input.budgetTier];
+  const giftBlueprints = input.profile.matched_profile.gifts[input.budgetTier];
   const primary = buildFallbackGift(
-    giftNames[0],
+    giftBlueprints[0],
     0,
     input.profile,
     input.occasion,
@@ -1581,14 +2249,14 @@ function buildFallbackAnalysis(input: {
   });
   const backups = [
     buildFallbackGift(
-      giftNames[1],
+      giftBlueprints[1],
       1,
       input.profile,
       input.occasion,
       input.budgetTier,
     ),
     buildFallbackGift(
-      giftNames[2],
+      giftBlueprints[2],
       2,
       input.profile,
       input.occasion,
@@ -1603,12 +2271,13 @@ function buildFallbackAnalysis(input: {
   return {
     customer_summary: input.profile.customer_summary,
     decision_summary: truncate(
-      `如果只先定一个礼物，优先选「${primary.name}」。它最贴近客户当前呈现出的“${input.profile.industry_signal}”线索，也更适合 ${occasionMeta.label} 这个时机。${conservativeNote}`,
+      `如果只先定一个礼物，优先选「${primary.name}」。它和客户当前呈现出的“${input.profile.industry_signal}”线索最相关，不是常规目录货，同时还能保留一点新鲜感；再加上它在 ${occasionMeta.label} 这个时机更容易解释和执行，所以这版先推它。${conservativeNote}`,
       240,
     ),
     analysis_confidence: input.profile.confidence,
     analysis_gaps: input.profile.gaps.slice(0, 3),
     evidence_highlights: input.profile.evidence_highlights,
+    recipient_anchors: input.profile.recipient_anchors,
     recipient_role: input.profile.recipient_role,
     target_region: input.profile.target_region,
     primary_recommendation: primary,
@@ -1709,7 +2378,10 @@ export async function createSerendipityAnalysis(input: {
       : []),
   ];
   const usableSources = fetchedSources.filter(
-    (source) => source.status === "used" && source.content.trim().length > 0,
+    (source) =>
+      source.status === "used" &&
+      source.content.trim().length > 0 &&
+      source.quality === "strong",
   );
 
   if (manualSource) {
@@ -1733,6 +2405,17 @@ export async function createSerendipityAnalysis(input: {
   );
 
   try {
+    const openAIConfig = resolveOpenAIConfig();
+
+    if (shouldSkipOpenAI(openAIConfig)) {
+      return buildFallbackAnalysis({
+        profile,
+        sourceSummary,
+        occasion,
+        budgetTier,
+      });
+    }
+
     const aiResult = await generateDecisionWithOpenAI({
       profile,
       sources: usableSources,
@@ -1753,7 +2436,11 @@ export async function createSerendipityAnalysis(input: {
       );
     }
 
-    console.error("[analyze] falling back to heuristic mode", error);
+    if (isFastFallbackError(error)) {
+      console.warn("[analyze] AI unavailable, switched to fallback quickly");
+    } else {
+      console.error("[analyze] falling back to heuristic mode", error);
+    }
 
     return buildFallbackAnalysis({
       profile,
