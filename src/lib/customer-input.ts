@@ -7,6 +7,16 @@ function trimCandidate(value: string) {
   return value.replace(/[),.;]+$/g, "").trim();
 }
 
+function looksLikeTitleOrSignature(line: string) {
+  return /buyer|procurement|sourcing|founder|owner|ceo|president|director|manager|brand|marketing|product|engineer|sales|bd|采购|创始人|老板|总经理|品牌|市场|产品|工程|销售/i.test(
+    line,
+  );
+}
+
+function looksLikePersonName(line: string) {
+  return /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}(?:\s*\|\s*.+)?$/.test(line);
+}
+
 export function normalizeLink(input: string) {
   const trimmed = input.trim();
 
@@ -91,6 +101,10 @@ export function guessCompanyName(customerInput: string, links: string[]) {
     const withoutUrl = line.replace(URL_REGEX, " ").replace(EMAIL_REGEX, " ").trim();
 
     if (!withoutUrl) {
+      continue;
+    }
+
+    if (looksLikeTitleOrSignature(withoutUrl) || looksLikePersonName(withoutUrl)) {
       continue;
     }
 

@@ -75,6 +75,11 @@ interface CustomerProfileContext {
   gaps: string[];
   evidence_highlights: string[];
   recipient_anchors: string[];
+  personal_relevance_basis: string[];
+  personal_surprise_basis: string[];
+  personal_novelty_basis: string[];
+  delivery_style: string;
+  operator_note?: string;
   recipient_role: string;
   target_region: string;
   matched_profile: FallbackProfile;
@@ -114,6 +119,123 @@ const HUMAN_LABEL_KEYWORDS: Record<string, string[]> = {
   新办公室: ["workspace", "design", "brand"],
   品牌升级: ["brand", "design", "campaign"],
 };
+
+const personalityOptionsForInference: Array<{ keyword: string; value: string }> = [
+  { keyword: "低调", value: "低调谨慎" },
+  { keyword: "克制", value: "理性克制" },
+  { keyword: "不喜欢太花哨", value: "低调谨慎" },
+  { keyword: "detail", value: "讲究细节" },
+  { keyword: "细节", value: "讲究细节" },
+  { keyword: "taste", value: "审美敏感" },
+  { keyword: "审美", value: "审美敏感" },
+  { keyword: "practical", value: "务实直接" },
+  { keyword: "务实", value: "务实直接" },
+  { keyword: "效率", value: "重视效率" },
+  { keyword: "efficient", value: "重视效率" },
+  { keyword: "fresh", value: "喜欢新鲜事物" },
+  { keyword: "新鲜", value: "喜欢新鲜事物" },
+];
+
+const interestOptionsForInference: Array<{ keyword: string; value: string }> = [
+  { keyword: "coffee", value: "咖啡" },
+  { keyword: "咖啡", value: "咖啡" },
+  { keyword: "outdoor", value: "户外" },
+  { keyword: "户外", value: "户外" },
+  { keyword: "sport", value: "运动" },
+  { keyword: "运动", value: "运动" },
+  { keyword: "travel", value: "旅行" },
+  { keyword: "旅行", value: "旅行" },
+  { keyword: "design", value: "设计" },
+  { keyword: "设计", value: "设计" },
+  { keyword: "tech", value: "科技产品" },
+  { keyword: "科技", value: "科技产品" },
+  { keyword: "sustainable", value: "可持续" },
+  { keyword: "可持续", value: "可持续" },
+  { keyword: "material", value: "可持续" },
+  { keyword: "环保", value: "可持续" },
+  { keyword: "book", value: "书店 / 阅读" },
+  { keyword: "阅读", value: "书店 / 阅读" },
+  { keyword: "pet", value: "宠物" },
+  { keyword: "宠物", value: "宠物" },
+  { keyword: "office", value: "新办公室" },
+  { keyword: "办公室", value: "新办公室" },
+  { keyword: "rebrand", value: "品牌升级" },
+  { keyword: "品牌升级", value: "品牌升级" },
+];
+
+const PERSONAL_RELEVANCE_HINTS: Array<{
+  keywords: string[];
+  basis: string;
+}> = [
+  {
+    keywords: ["环保", "可持续", "responsible", "sustainable", "材料"],
+    basis: "对方最近明显在意材料、责任感或可持续表达。",
+  },
+  {
+    keywords: ["设计", "审美", "品牌", "visual", "creative"],
+    basis: "对方对品牌语气、设计细节或审美一致性更敏感。",
+  },
+  {
+    keywords: ["细节", "precision", "工艺", "品质"],
+    basis: "对方会在意细节、工艺完成度和用物是否讲究。",
+  },
+  {
+    keywords: ["效率", "务实", "buyer", "采购", "sourcing"],
+    basis: "对方更看重实用、好解释和执行效率。",
+  },
+  {
+    keywords: ["户外", "运动", "travel", "旅行"],
+    basis: "对方的生活方式线索比较明确，适合借场景去做连接。",
+  },
+  {
+    keywords: ["咖啡", "空间", "门店", "hospitality"],
+    basis: "对方更容易对空间氛围、体验感和日常使用场景产生共鸣。",
+  },
+];
+
+const PERSONAL_SURPRISE_HINTS: Array<{
+  keywords: string[];
+  basis: string;
+}> = [
+  {
+    keywords: ["不喜欢太花哨", "低调", "克制", "谨慎"],
+    basis: "意外点不能靠夸张包装，而要靠你观察到了他的偏好边界。",
+  },
+  {
+    keywords: ["buyer", "采购", "效率", "务实"],
+    basis: "意外点来自你没有送俗套商务礼，而是送了一个他能马上理解用途的组合。",
+  },
+  {
+    keywords: ["设计", "品牌", "审美"],
+    basis: "意外点来自你回应了他的审美判断，而不是只送行政礼盒。",
+  },
+  {
+    keywords: ["环保", "可持续", "材料"],
+    basis: "意外点来自你抓住了他最近真正在看的议题，而不是泛泛送绿色周边。",
+  },
+];
+
+const PERSONAL_NOVELTY_HINTS: Array<{
+  keywords: string[];
+  basis: string;
+}> = [
+  {
+    keywords: ["材料", "可持续", "环保"],
+    basis: "新鲜感更应该来自材料故事和触感，而不是从没见过的奇怪物件。",
+  },
+  {
+    keywords: ["设计", "审美", "品牌"],
+    basis: "新鲜感更适合来自组合方式和说明逻辑，而不是单纯贵一点。",
+  },
+  {
+    keywords: ["户外", "运动", "旅行"],
+    basis: "新鲜感可以来自生活方式场景被翻译成商务可送的小组合。",
+  },
+  {
+    keywords: ["效率", "务实", "buyer", "采购"],
+    basis: "新鲜感要克制，重点是比普通礼物更懂他，但不能让他有负担。",
+  },
+];
 
 function createGiftBlueprint(input: {
   name: string;
@@ -1398,6 +1520,150 @@ function buildHumanSignalSummary(input: {
   return truncate(parts.join("；"), 220);
 }
 
+function buildSignalCorpus(input: {
+  personTraits: string[];
+  personInterests: string[];
+  recentChat?: string;
+  personImpression?: string;
+  recipientRole: string;
+  note?: string;
+  industrySignal: string;
+}) {
+  return [
+    ...input.personTraits,
+    ...input.personInterests,
+    input.recentChat ?? "",
+    input.personImpression ?? "",
+    input.note ?? "",
+    input.recipientRole,
+    input.industrySignal,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function pickPersonalBasis(
+  corpus: string,
+  registry: Array<{ keywords: string[]; basis: string }>,
+  fallback: string,
+  limit = 2,
+) {
+  const matches = registry
+    .filter((item) =>
+      item.keywords.some((keyword) => corpus.includes(keyword.toLowerCase())),
+    )
+    .map((item) => item.basis);
+
+  if (matches.length === 0) {
+    return [fallback];
+  }
+
+  return [...new Set(matches)].slice(0, limit);
+}
+
+function inferDeliveryStyle(input: {
+  personTraits: string[];
+  personInterests: string[];
+  recentChat?: string;
+  personImpression?: string;
+  recipientRole: string;
+}) {
+  const traits = input.personTraits.join(" ");
+  const interests = input.personInterests.join(" ");
+  const recentChat = input.recentChat?.toLowerCase() ?? "";
+  const impression = input.personImpression?.toLowerCase() ?? "";
+  const role = input.recipientRole;
+
+  if (
+    /不喜欢太花哨|simple|minimal|low.?key/.test(recentChat) ||
+    /低调谨慎|理性克制/.test(traits) ||
+    impression.includes("低调") ||
+    impression.includes("克制")
+  ) {
+    return "克制、安静、别太满";
+  }
+
+  if (
+    /喜欢新鲜事物|审美敏感|热情外向/.test(traits) ||
+    /设计|品牌升级/.test(interests) ||
+    impression.includes("有审美") ||
+    role.includes("品牌") ||
+    role.includes("市场")
+  ) {
+    return "有设计感，但仍然商务安全";
+  }
+
+  if (
+    /务实直接|重视效率/.test(traits) ||
+    role.includes("采购") ||
+    recentChat.includes("效率") ||
+    recentChat.includes("别太复杂")
+  ) {
+    return "解释要直接，最好一眼能懂";
+  }
+
+  return "轻一点、自然一点，像顺手但明显做过功课";
+}
+
+function inferAutoHumanClues(input: {
+  customerInput?: string;
+  note?: string;
+  personTraits: string[];
+  personInterests: string[];
+  recentChat?: string;
+  personImpression?: string;
+}) {
+  const seeds = [
+    input.customerInput ?? "",
+    input.note ?? "",
+    input.recentChat ?? "",
+    input.personImpression ?? "",
+  ]
+    .join("\n")
+    .split(/\n+/)
+    .map((line) => cleanText(line))
+    .filter(Boolean);
+
+  const recentChat =
+    input.recentChat?.trim() ||
+    seeds.find((line) =>
+      /他说|她说|he said|she said|recently|最近|不喜欢|喜欢|在看|looking at|working on/i.test(
+        line,
+      ),
+    );
+
+  const personImpression =
+    input.personImpression?.trim() ||
+    seeds.find((line) =>
+      /感觉|印象|seems|comes across|偏|比较|low-key|detail|taste/i.test(line),
+    );
+
+  const traits = new Set(input.personTraits);
+  const interests = new Set(input.personInterests);
+  const mergedText = seeds.join(" ").toLowerCase();
+
+  for (const label of personalityOptionsForInference) {
+    if (mergedText.includes(label.keyword)) {
+      traits.add(label.value);
+    }
+  }
+
+  for (const label of interestOptionsForInference) {
+    if (mergedText.includes(label.keyword)) {
+      interests.add(label.value);
+    }
+  }
+
+  return {
+    personTraits: [...traits].slice(0, 8),
+    personInterests: [...interests].slice(0, 8),
+    recentChat: recentChat ? truncate(cleanText(recentChat), 420) : undefined,
+    personImpression: personImpression
+      ? truncate(cleanText(personImpression), 220)
+      : undefined,
+  };
+}
+
 function buildRecipientAnchors(input: {
   matchedProfile: FallbackProfile;
   recipientRole: string;
@@ -1436,6 +1702,68 @@ function buildRecipientAnchors(input: {
   }
 
   return anchors.slice(0, 5);
+}
+
+function buildPersonalRelevanceBasis(input: {
+  personTraits: string[];
+  personInterests: string[];
+  recentChat?: string;
+  personImpression?: string;
+  recipientRole: string;
+  note?: string;
+  industrySignal: string;
+}) {
+  const corpus = buildSignalCorpus(input);
+
+  return pickPersonalBasis(
+    corpus,
+    PERSONAL_RELEVANCE_HINTS,
+    "目前更强的个人偏好线索不多，所以相关性主要还是靠岗位和客户当前业务语境来支撑。",
+  );
+}
+
+function buildPersonalSurpriseBasis(input: {
+  personTraits: string[];
+  personInterests: string[];
+  recentChat?: string;
+  personImpression?: string;
+  recipientRole: string;
+  note?: string;
+  industrySignal: string;
+}) {
+  const corpus = buildSignalCorpus(input);
+
+  return pickPersonalBasis(
+    corpus,
+    PERSONAL_SURPRISE_HINTS,
+    "这次的意外点要做得克制一些，重点不是猎奇，而是让对方觉得你不是随手选了通用商务礼。",
+  );
+}
+
+function buildPersonalNoveltyBasis(input: {
+  personTraits: string[];
+  personInterests: string[];
+  recentChat?: string;
+  personImpression?: string;
+  recipientRole: string;
+  note?: string;
+  industrySignal: string;
+}) {
+  const corpus = buildSignalCorpus(input);
+
+  return pickPersonalBasis(
+    corpus,
+    PERSONAL_NOVELTY_HINTS,
+    "这次的新鲜感更适合来自组合逻辑和说明方式，而不是奇怪或昂贵的物件本身。",
+  );
+}
+
+function hasSpecificPersonalBasis(value?: string) {
+  if (!value) {
+    return false;
+  }
+
+  return !value.startsWith("目前更强的个人偏好线索不多");
 }
 
 function buildHumanKeywordHints(values: string[]) {
@@ -1692,6 +2020,40 @@ function buildCustomerProfileContext(
     recentChat,
     personImpression,
   });
+  const personalRelevanceBasis = buildPersonalRelevanceBasis({
+    personTraits,
+    personInterests,
+    recentChat,
+    personImpression,
+    recipientRole,
+    note,
+    industrySignal: matchedProfile.label,
+  });
+  const personalSurpriseBasis = buildPersonalSurpriseBasis({
+    personTraits,
+    personInterests,
+    recentChat,
+    personImpression,
+    recipientRole,
+    note,
+    industrySignal: matchedProfile.label,
+  });
+  const personalNoveltyBasis = buildPersonalNoveltyBasis({
+    personTraits,
+    personInterests,
+    recentChat,
+    personImpression,
+    recipientRole,
+    note,
+    industrySignal: matchedProfile.label,
+  });
+  const deliveryStyle = inferDeliveryStyle({
+    personTraits,
+    personInterests,
+    recentChat,
+    personImpression,
+    recipientRole,
+  });
 
   return {
     customer_summary: truncate(
@@ -1708,6 +2070,11 @@ function buildCustomerProfileContext(
     gaps,
     evidence_highlights: evidenceHighlights,
     recipient_anchors: recipientAnchors,
+    personal_relevance_basis: personalRelevanceBasis,
+    personal_surprise_basis: personalSurpriseBasis,
+    personal_novelty_basis: personalNoveltyBasis,
+    delivery_style: deliveryStyle,
+    operator_note: note?.trim() ? truncate(cleanText(note), 120) : undefined,
     recipient_role: recipientRole,
     target_region: targetRegion,
     matched_profile: matchedProfile,
@@ -1936,6 +2303,114 @@ function fallbackTargetUnitPrice(
   return position === 0 ? "单份建议 380-680 元" : "单份建议 320-620 元";
 }
 
+function scoreBlueprintForProfile(
+  blueprint: FallbackGiftBlueprint,
+  profile: CustomerProfileContext,
+) {
+  let score = 0;
+  const joinedComponents = blueprint.components.join(" ");
+  const role = profile.recipient_role;
+  const personalText = [
+    ...profile.personal_relevance_basis,
+    ...profile.personal_surprise_basis,
+    ...profile.personal_novelty_basis,
+    profile.human_signal,
+    profile.delivery_style,
+  ].join(" ");
+
+  for (const tag of blueprint.anchor_tags) {
+    if (profile.human_signal.includes(tag) || personalText.includes(tag)) {
+      score += 3;
+    }
+  }
+
+  if (role.includes("采购")) {
+    if (/样片|材料|展示册|托盘/.test(joinedComponents + blueprint.name)) {
+      score += 6;
+    }
+    if (/黄铜|摆件|出版物/.test(blueprint.name)) {
+      score -= 2;
+    }
+  }
+
+  if (role.includes("品牌") || role.includes("市场")) {
+    if (/设计|出版物|书签|样片|视觉/.test(joinedComponents + blueprint.name)) {
+      score += 6;
+    }
+  }
+
+  if (role.includes("创始") || role.includes("老板")) {
+    if (/桌面|黄铜|器物|托盘/.test(joinedComponents + blueprint.name)) {
+      score += 5;
+    }
+  }
+
+  if (/低调谨慎|理性克制/.test(profile.human_signal + profile.delivery_style)) {
+    if (/薄封套|说明卡|卡套|轻礼盒|托盘/.test(joinedComponents)) {
+      score += 4;
+    }
+    if (/硬盒/.test(joinedComponents)) {
+      score -= 1;
+    }
+  }
+
+  if (/审美敏感|设计|品牌升级/.test(profile.human_signal)) {
+    if (/出版物|黄铜|材质样片|设计文具|视觉/.test(joinedComponents + blueprint.name)) {
+      score += 5;
+    }
+  }
+
+  if (/可持续|环保|材料/.test(profile.human_signal)) {
+    if (/样片|材料|再生|环保/.test(joinedComponents + blueprint.name)) {
+      score += 7;
+    }
+  }
+
+  if (/户外|旅行|运动/.test(profile.human_signal)) {
+    if (/杯垫|路线|坐标|地图|城市/.test(joinedComponents + blueprint.name)) {
+      score += 4;
+    }
+  }
+
+  if (/务实直接|重视效率/.test(profile.human_signal)) {
+    if (/样片|卡套|托盘|书签/.test(joinedComponents + blueprint.name)) {
+      score += 4;
+    }
+  }
+
+  if (/喜欢新鲜事物/.test(profile.human_signal)) {
+    if (/组合|礼盒|礼套|摆件|出版物/.test(blueprint.name)) {
+      score += 3;
+    }
+  }
+
+  return score;
+}
+
+function rankGiftBlueprints(
+  blueprints: [FallbackGiftBlueprint, FallbackGiftBlueprint, FallbackGiftBlueprint],
+  profile: CustomerProfileContext,
+) {
+  return [...blueprints]
+    .map((blueprint, index) => ({
+      blueprint,
+      index,
+      score: scoreBlueprintForProfile(blueprint, profile),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return left.index - right.index;
+    })
+    .map((item) => item.blueprint) as [
+    FallbackGiftBlueprint,
+    FallbackGiftBlueprint,
+    FallbackGiftBlueprint,
+  ];
+}
+
 function fallbackLeadTime(name: string) {
   if (/书签|笔记本|纸卡|小册|期刊|地图册/.test(name)) {
     return "现货通常 2-5 天；轻定制 5-7 天";
@@ -1952,9 +2427,18 @@ function fallbackLeadTime(name: string) {
   return "现货通常 3-6 天；轻定制 6-9 天";
 }
 
-function fallbackCustomizationLevel(name: string) {
+function fallbackCustomizationLevel(
+  name: string,
+  profile: CustomerProfileContext,
+) {
   if (/黄铜|纸镇|书挡|摆件/.test(name)) {
-    return "低到中，尽量不要刻客户 logo，只保留简洁说明卡";
+    return profile.delivery_style.includes("设计感")
+      ? "低到中，不建议刻客户 logo，可做一张有语气但克制的说明卡"
+      : "低到中，尽量不要刻客户 logo，只保留简洁说明卡";
+  }
+
+  if (profile.delivery_style.includes("解释要直接")) {
+    return "低，优先现货，最多补一张解释用途的说明卡，不建议重定制";
   }
 
   return "低，优先现货或轻包装，不建议重定制";
@@ -2073,26 +2557,39 @@ function fallbackSamplePlan(
 function fallbackPackagingPlan(
   occasion: Occasion,
   budgetTier: BudgetTier,
+  profile: CustomerProfileContext,
 ) {
   const base =
     budgetTier === "800_1500_cny"
       ? "简洁硬盒加说明卡即可，重点是质感，不是做厚重礼箱。"
       : "单品加说明卡或薄礼盒即可，不要做体积大、运输成本高的包装。";
+  const styleNote = profile.delivery_style.includes("克制")
+    ? "说明卡语气尽量安静，不要写成宣传页。"
+    : profile.delivery_style.includes("解释要直接")
+      ? "说明卡重点写清为什么选它、怎么用，不要写虚词。"
+      : "说明卡重点写出你观察到了什么，而不是堆品牌话术。";
 
   if (occasion === "client_visit") {
-    return `${base} 还要保证客户当天方便带走。`;
+    return `${base} 还要保证客户当天方便带走。${styleNote}`;
   }
 
   if (occasion === "trade_show_follow_up") {
-    return `${base} 包装优先考虑快递稳定和防压。`;
+    return `${base} 包装优先考虑快递稳定和防压。${styleNote}`;
   }
 
-  return `${base} 包装风格保持克制，避免第一次见面就显得太重。`;
+  return `${base} 包装风格保持克制，避免第一次见面就显得太重。${styleNote}`;
 }
 
-function fallbackBrandingNote(recipientRole: string) {
+function fallbackBrandingNote(
+  recipientRole: string,
+  profile: CustomerProfileContext,
+) {
   if (recipientRole.includes("品牌") || recipientRole.includes("市场")) {
     return "不建议直接打客户 logo，可做克制腰封或说明卡，重点放在理由解释上。";
+  }
+
+  if (profile.delivery_style.includes("解释要直接")) {
+    return "默认不要打客户 logo，保留一张短说明卡就够，重点把送礼理由讲明白。";
   }
 
   return "默认不要打客户 logo，最多保留说明卡或外贴签，避免像促销赠品。";
@@ -2114,8 +2611,15 @@ function buildFallbackProcurementBrief(input: {
     input.budgetTier,
   );
   const samplePlan = fallbackSamplePlan(input.profile, input.primary.name);
-  const packagingPlan = fallbackPackagingPlan(input.occasion, input.budgetTier);
-  const brandingNote = fallbackBrandingNote(input.profile.recipient_role);
+  const packagingPlan = fallbackPackagingPlan(
+    input.occasion,
+    input.budgetTier,
+    input.profile,
+  );
+  const brandingNote = fallbackBrandingNote(
+    input.profile.recipient_role,
+    input.profile,
+  );
   const supplierMessage = truncate(
     [
       `先按「${input.primary.name}」询价。`,
@@ -2162,13 +2666,25 @@ function buildFallbackGift(
       : `客户当前更偏「${profile.industry_signal}」这条线。`;
   const unexpectedAngle =
     position === 0
-      ? blueprint.unexpected_hook
+      ? `${blueprint.unexpected_hook} ${profile.personal_surprise_basis[0] ?? ""}`.trim()
       : `它避开了和主推荐同一套路，换了一个不同的表达角度。${blueprint.unexpected_hook}`;
-  const noveltyAngle = blueprint.novelty_hook;
+  const noveltyAngle = `${blueprint.novelty_hook} ${profile.personal_novelty_basis[0] ?? ""}`.trim();
   const businessFit =
     profile.confidence === "low"
       ? `虽然这版判断偏保守，但它仍然比常规纪念品更有针对性，而且在 ${budgetMeta.label}、寄送和审批上更容易落地。`
-      : `${roleText}。${humanText}。在 ${budgetMeta.label}、交期、寄送和内部解释上，这套组合更容易执行。`;
+      : `${roleText}。${humanText}。整体送法建议走「${profile.delivery_style}」这一路线，在 ${budgetMeta.label}、交期、寄送和内部解释上更容易执行。`;
+  const relevanceBasis = profile.personal_relevance_basis[0] ?? "";
+  const anchorLead =
+    position === 0 && hasSpecificPersonalBasis(relevanceBasis)
+      ? `它最应该打的命中点是：${relevanceBasis}`
+      : position === 0
+        ? ""
+        : hasSpecificPersonalBasis(relevanceBasis)
+          ? `它依然成立，因为它保留了这次最核心的人物命中点：${relevanceBasis}`
+          : "";
+  const relevanceSuffix = hasSpecificPersonalBasis(relevanceBasis)
+    ? relevanceBasis
+    : "这次更主要是顺着客户角色和当前业务语境去收窄礼物范围。";
 
   return {
     name: blueprint.name,
@@ -2178,12 +2694,12 @@ function buildFallbackGift(
     ),
     reason:
       position === 0
-        ? `它最贴合客户当前呈现出的“${profile.industry_signal}”特征，而且礼物不是单个品类，而是一套更像为这个客户拼出来的组合。`
+        ? `它最贴合客户当前呈现出的“${profile.industry_signal}”特征，而且礼物不是单个品类，而是一套更像为这个客户拼出来的组合。${anchorLead}`.trim()
         : `它仍然围绕客户的“${profile.industry_signal}”线索展开，但组合方式和主推荐明显不同，适合作为备选。`,
     why_relevant:
       position === 0
-        ? `${roleText}，它和客户当前呈现出的「${profile.industry_signal}」最贴近。${anchorText} ${humanText}。`
-        : `它依然和客户当前的「${profile.industry_signal}」相关，不是脱离客户画像硬凑出来的备选。${anchorText}`,
+        ? `${roleText}，它和客户当前呈现出的「${profile.industry_signal}」最贴近。${anchorText} ${humanText}。${relevanceSuffix}`
+        : `它依然和客户当前的「${profile.industry_signal}」相关，不是脱离客户画像硬凑出来的备选。${anchorText} ${relevanceSuffix}`,
     why_unexpected: unexpectedAngle,
     why_novel: noveltyAngle,
     business_fit: businessFit,
@@ -2197,14 +2713,14 @@ function buildFallbackGift(
         : `${budgetMeta.label}下它依然能成立，但更适合你想保留一点差异化时使用。`,
     target_unit_price: fallbackTargetUnitPrice(budgetTier, position),
     lead_time: fallbackLeadTime(blueprint.name),
-    customization_level: fallbackCustomizationLevel(blueprint.name),
+    customization_level: fallbackCustomizationLevel(blueprint.name, profile),
     shipping_ease: fallbackShippingEase(blueprint.name, profile.target_region),
     sourcing_tip: fallbackSourcingTip(blueprint.name),
     approval_hint: fallbackApprovalHint(profile.recipient_role, budgetTier),
     caution: profile.matched_profile.cautions[position],
     message_snippet:
       position === 0
-        ? `如果只先定一个礼物，我会优先选「${blueprint.name}」，因为它不是单一品类，而是一套更贴合客户当下表达和这个时机的组合。`
+        ? `如果只先定一个礼物，我会优先选「${blueprint.name}」，因为它不是单一品类，而是顺着对方这次最明显的人物线索去搭出来的一套组合。`
         : `如果主推荐不方便落地，可以改成「${blueprint.name}」，方向仍然贴合客户，但表达方式会更克制一些。`,
   };
 }
@@ -2213,16 +2729,21 @@ function buildFallbackFollowUpMessage(
   occasion: Occasion,
   primaryName: string,
   industrySignal: string,
+  personalBasis?: string,
 ) {
+  const basisText = hasSpecificPersonalBasis(personalBasis)
+    ? personalBasis
+    : "";
+
   if (occasion === "first_visit") {
-    return `可以这样沟通：下周正式拜访前，我一直在想带什么小礼物更合适。后来想到「${primaryName}」这个方向，不会太重，但能更贴近你们现在的品牌表达，也比较符合 ${industrySignal} 这类线索。`;
+    return `可以这样沟通：下周正式拜访前，我一直在想带什么小礼物更合适。后来想到「${primaryName}」这个方向，不会太重，但能更贴近你们现在的品牌表达。${basisText ? `我主要是抓住了「${basisText}」这个点。` : `也比较符合 ${industrySignal} 这类线索。`}`;
   }
 
   if (occasion === "client_visit") {
-    return `可以这样沟通：知道你们这次要来访，我想准备一个不夸张但有记忆点的小礼物。后来想到「${primaryName}」这个方向，方便带走，也更贴近你们现在的品牌表达和 ${industrySignal} 这类线索。`;
+    return `可以这样沟通：知道你们这次要来访，我想准备一个不夸张但有记忆点的小礼物。后来想到「${primaryName}」这个方向，方便带走，也更贴近你们现在的品牌表达。${basisText ? `我主要是顺着「${basisText}」这个点去想的。` : `也更符合 ${industrySignal} 这类线索。`}`;
   }
 
-  return `可以这样跟进：展会上和您聊完后，我一直在想什么小礼物会更贴近你们现在的品牌表达。后来我想到「${primaryName}」这个方向，不重，但比较有记忆点，也更符合 ${industrySignal} 这类线索。`;
+  return `可以这样跟进：展会上和您聊完后，我一直在想什么小礼物会更贴近你们现在的品牌表达。后来我想到「${primaryName}」这个方向，不重，但比较有记忆点。${basisText ? `主要是因为我注意到「${basisText}」。` : `也更符合 ${industrySignal} 这类线索。`}`;
 }
 
 function buildFallbackAnalysis(input: {
@@ -2233,7 +2754,10 @@ function buildFallbackAnalysis(input: {
 }): AnalyzeResponse {
   const occasionMeta = getOccasionMeta(input.occasion);
   const budgetMeta = getBudgetMeta(input.budgetTier);
-  const giftBlueprints = input.profile.matched_profile.gifts[input.budgetTier];
+  const giftBlueprints = rankGiftBlueprints(
+    input.profile.matched_profile.gifts[input.budgetTier],
+    input.profile,
+  );
   const primary = buildFallbackGift(
     giftBlueprints[0],
     0,
@@ -2267,11 +2791,22 @@ function buildFallbackAnalysis(input: {
     input.profile.gaps.length > 0
       ? "本次公开信息有限，所以主推荐偏保守，但执行风险更低。"
       : "主推荐优先考虑好执行、好寄送和当前场景下的实际落地性。";
+  const primaryPersonalBasis = input.profile.personal_relevance_basis[0] ?? "";
+  const personalHitLine =
+    primaryPersonalBasis &&
+    !primaryPersonalBasis.startsWith("目前更强的个人偏好线索不多")
+      ? `这次最关键的命中点是：${primaryPersonalBasis}`
+      : "";
+  const summaryLink =
+    personalHitLine ||
+    input.profile.recipient_role !== DEFAULT_RECIPIENT_ROLE
+      ? `它顺着这次最明显的人物线索在走。${personalHitLine}`
+      : "它优先顺着客户当前业务语境和角色去收窄范围。";
 
   return {
     customer_summary: input.profile.customer_summary,
     decision_summary: truncate(
-      `如果只先定一个礼物，优先选「${primary.name}」。它和客户当前呈现出的“${input.profile.industry_signal}”线索最相关，不是常规目录货，同时还能保留一点新鲜感；再加上它在 ${occasionMeta.label} 这个时机更容易解释和执行，所以这版先推它。${conservativeNote}`,
+      `如果只先定一个礼物，优先选「${primary.name}」。它和客户当前呈现出的“${input.profile.industry_signal}”线索最相关，${summaryLink} 它不是常规目录货，同时还能保留一点新鲜感；再加上它在 ${occasionMeta.label} 这个时机更容易解释和执行，所以这版先推它。${conservativeNote}`,
       240,
     ),
     analysis_confidence: input.profile.confidence,
@@ -2288,6 +2823,7 @@ function buildFallbackAnalysis(input: {
         input.occasion,
         primary.name,
         input.profile.industry_signal,
+        input.profile.personal_relevance_basis[0],
       ),
       260,
     ),
@@ -2329,14 +2865,20 @@ export async function createSerendipityAnalysis(input: {
   const budgetTier = input.budgetTier ?? DEFAULT_BUDGET_TIER;
   const recipientRole = normalizeRecipientRole(input.recipientRole);
   const targetRegion = normalizeTargetRegion(input.targetRegion);
-  const personTraits = normalizeHumanLabels(input.personTraits);
-  const personInterests = normalizeHumanLabels(input.personInterests);
-  const recentChat = input.recentChat?.trim()
-    ? truncate(cleanText(input.recentChat), 420)
-    : undefined;
-  const personImpression = input.personImpression?.trim()
-    ? truncate(cleanText(input.personImpression), 220)
-    : undefined;
+  const normalizedTraits = normalizeHumanLabels(input.personTraits);
+  const normalizedInterests = normalizeHumanLabels(input.personInterests);
+  const inferredHumanClues = inferAutoHumanClues({
+    customerInput,
+    note: input.note,
+    personTraits: normalizedTraits,
+    personInterests: normalizedInterests,
+    recentChat: input.recentChat,
+    personImpression: input.personImpression,
+  });
+  const personTraits = inferredHumanClues.personTraits;
+  const personInterests = inferredHumanClues.personInterests;
+  const recentChat = inferredHumanClues.recentChat;
+  const personImpression = inferredHumanClues.personImpression;
   const companyName = truncate(
     cleanText(input.companyName?.trim() || guessCompanyName(customerInput, links) || ""),
     80,
